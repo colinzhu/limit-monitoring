@@ -30,9 +30,51 @@ The system follows a microservices architecture with event-driven processing to 
 ### Technology Stack
 - **Message Queue**: Apache Kafka for high-throughput settlement ingestion
 - **Database**: PostgreSQL with read replicas for scalability
-- **Caching**: Redis for frequently accessed data (exchange rates, rules, limits)
+- **Caching**: Redis for frequently accessed data (exchange rates, rules, limits, computed statuses)
 - **API Framework**: REST APIs with OpenAPI specification
 - **Background Processing**: Scheduled jobs for rule and rate synchronization
+
+### Performance Optimization Strategy
+
+The system design addresses several critical performance challenges that arise in high-volume financial processing:
+
+#### Challenge 1: Mass Status Updates During Limit Fluctuations
+**Problem**: When a group with 10,000 settlements fluctuates around the 500M USD limit (due to new settlements or version updates), updating the status field of all 10,000 settlement records every few seconds would create severe database performance issues.
+
+**Solution - Dynamic Status Computation**: 
+- Settlement status (CREATED/BLOCKED) is computed on-demand based on current group subtotal and exposure limit
+- No status field stored in the Settlement table for CREATED/BLOCKED states
+- Only approval actions (PENDING_AUTHORISE, AUTHORISED) are persisted in a separate SettlementApproval table
+- When group subtotal changes, only the group record is updated, not individual settlements
+- Status computation is cached in Redis with 30-second TTL for performance
+
+#### Challenge 2: Mass Updates When Filter Criteria Change
+**Problem**: If filtering rules are updated and `isEligibleForCalculation` were stored in the Settlement table, all settlement records in the database would need to be updated, potentially affecting millions of records.
+
+**Solution - Dynamic Eligibility Computation**:
+- No `isEligibleForCalculation` field stored in the Settlement table
+- Eligibility is computed dynamically during subtotal calculation using current filtering rules
+- When rules change, only group subtotals are recalculated, not individual settlement records
+- Rule evaluation results are cached in Redis to avoid repeated computation
+- Settlement records remain immutable, containing only factual data
+
+#### Challenge 3: Stale Exchange Rate Data
+**Problem**: Storing `usdEquivalent` and `exchangeRateUsed` with each settlement creates data consistency issues. If a settlement is created today and another 2 years later, using different historical rates would make subtotal calculations inconsistent and complex.
+
+**Solution - On-Demand Currency Conversion**:
+- No `usdEquivalent` or `exchangeRateUsed` fields stored in the Settlement table
+- USD conversion is performed on-demand during subtotal calculation using the latest available exchange rate
+- Ensures all settlements in a group use consistent, current exchange rates for subtotal calculation
+- Simplifies the calculation logic and maintains data consistency
+- Exchange rates are cached in Redis for performance
+
+#### Performance Benefits
+This approach provides several key benefits:
+- **Minimal Database Writes**: Only factual settlement data and group subtotals are persisted
+- **Scalable Updates**: Group-level updates scale with number of groups, not individual settlements
+- **Consistent Calculations**: All computations use current rules, limits, and exchange rates
+- **Cache Efficiency**: Computed values are cached to reduce repeated calculations
+- **Data Integrity**: Immutable settlement records prevent data corruption during high-volume processing
 
 ## Components and Interfaces
 
@@ -61,26 +103,39 @@ GET /api/settlements/{settlementId}/status
 - Convert currencies to USD using latest exchange rates
 - Calculate and maintain group subtotals
 - Handle settlement version updates and group migrations
-- Trigger limit evaluations
+- Compute settlement eligibility using current filtering rules
 
 **Key Operations:**
-- Real-time subtotal calculation (< 10 seconds)
+- Real-time subtotal calculation (< 10 seconds) using materialized group totals
 - Group rebalancing when settlement details change
-- Currency conversion with point-in-time rates
-- Efficient handling of high-volume updates
+- Dynamic currency conversion with latest available rates
+- Efficient handling of high-volume updates without mass settlement record updates
+- On-demand status computation to avoid performance bottlenecks
+
+**Performance Optimizations:**
+- Maintain materialized subtotals at group level only
+- Use Redis caching for frequently accessed group calculations
+- Compute individual settlement status dynamically from group state
+- Batch process settlement updates to minimize database transactions
 
 ### Limit Monitoring Service
 **Responsibilities:**
 - Compare group subtotals against exposure limits
-- Manage settlement status transitions (CREATED → BLOCKED → PENDING_AUTHORISE → AUTHORISED)
-- Handle limit updates and re-evaluation
+- Compute settlement status dynamically based on group state and approval records
+- Handle limit updates and re-evaluation at group level
 - Support both fixed limits (MVP) and counterparty-specific limits
 
-**Status Management:**
-- CREATED: Group subtotal within limit
-- BLOCKED: Group subtotal exceeds limit
-- PENDING_AUTHORISE: After REQUEST RELEASE action
-- AUTHORISED: After AUTHORISE action by different user
+**Status Computation Logic:**
+- CREATED: Group subtotal within limit AND no approval record exists
+- BLOCKED: Group subtotal exceeds limit AND no approval record exists  
+- PENDING_AUTHORISE: Approval record exists with REQUEST RELEASE action
+- AUTHORISED: Approval record exists with both REQUEST RELEASE and AUTHORISE actions
+
+**Performance Considerations:**
+- Status computed on-demand to avoid mass updates when group totals fluctuate
+- Only settlements with approval actions have persistent status records
+- Group-level limit evaluation prevents individual settlement updates
+- Caching layer reduces computation overhead for frequently queried settlements
 
 ### Approval Workflow Service
 **Responsibilities:**
@@ -109,15 +164,19 @@ interface Settlement {
   valueDate: Date;
   currency: string;
   amount: number;
-  status: SettlementStatus;
-  isEligibleForCalculation: boolean;
-  usdEquivalent?: number;
-  exchangeRateUsed?: number;
   createdAt: Date;
   updatedAt: Date;
 }
 
-enum SettlementStatus {
+// Status and eligibility are computed dynamically, not stored
+interface SettlementStatus {
+  settlementId: string;
+  settlementVersion: number;
+  status: StatusEnum;
+  computedAt: Date;
+}
+
+enum StatusEnum {
   CREATED = 'CREATED',
   BLOCKED = 'BLOCKED',
   PENDING_AUTHORISE = 'PENDING_AUTHORISE',
@@ -138,6 +197,22 @@ interface SettlementGroup {
   settlementCount: number;
   exceedsLimit: boolean;
   lastCalculatedAt: Date;
+}
+
+// Separate table for approval actions to avoid mass updates
+interface SettlementApproval {
+  settlementId: string;
+  settlementVersion: number;
+  status: ApprovalStatusEnum;
+  requestedBy?: string;
+  requestedAt?: Date;
+  authorizedBy?: string;
+  authorizedAt?: Date;
+}
+
+enum ApprovalStatusEnum {
+  PENDING_AUTHORISE = 'PENDING_AUTHORISE',
+  AUTHORISED = 'AUTHORISED'
 }
 ```
 
