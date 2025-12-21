@@ -26,7 +26,7 @@ The Payment Limit Monitoring System is a financial risk management application t
 - **Settlement_ID**: Unique identifier for a settlement transaction
 - **Settlement_Version**: Version number for a settlement, as settlements can be modified over time
 - **Subtotal**: Aggregated USD equivalent amount for settlements grouped by PTS, Processing Entity, Counterparty, and Value Date
-- **Exposure_Limit**: Maximum allowed USD amount for a settlement group, either fixed at 500 million USD (MVP) or counterparty-specific limits fetched from external systems
+- **Exposure_Limit**: Maximum allowed USD amount for a settlement group, which is configurable and can be updated frequently. In MVP mode, a fixed limit of 500 million USD applies to all counterparties. In advanced mode, counterparty-specific limits are fetched from external systems. When limits are updated, the system must immediately reflect the new limits without requiring mass database updates or lengthy recalculation processes.
 - **Operation_Team**: Users responsible for reviewing and approving settlements that exceed limits
 - **CREATED**: Settlement status when the group subtotal is within the exposure limit
 - **BLOCKED**: Settlement status when the group subtotal exceeds the exposure limit
@@ -165,8 +165,9 @@ The Payment Limit Monitoring System is a financial risk management application t
 3. THE Payment_Limit_Monitoring_System SHALL automatically fetch and store exchange rates from external systems daily for currency conversion
 4. WHEN currency conversion is required, THE Payment_Limit_Monitoring_System SHALL use the latest available exchange rate at the time of settlement processing to convert amounts to USD equivalent
 5. WHEN new exchange rates are fetched and stored, THE Payment_Limit_Monitoring_System SHALL make them available for future settlement processing without recalculating existing subtotals
-6. WHEN counterparty-specific limits are updated, THE Payment_Limit_Monitoring_System SHALL re-evaluate all affected settlement groups against their respective new limits
-7. THE Payment_Limit_Monitoring_System SHALL log all configuration changes and limit updates with timestamps and system identity
+6. WHEN counterparty-specific limits are updated, THE Payment_Limit_Monitoring_System SHALL re-evaluate all affected settlement groups against their respective new limits immediately without requiring mass database updates
+7. WHEN exposure limits are changed frequently for operational or risk management purposes, THE Payment_Limit_Monitoring_System SHALL handle limit updates efficiently without performance degradation or lengthy recalculation processes
+8. THE Payment_Limit_Monitoring_System SHALL log all configuration changes and limit updates with timestamps and system identity
 
 ### Requirement 10
 
@@ -180,6 +181,41 @@ The Payment Limit Monitoring System is a financial risk management application t
 4. WHEN a settlement version update conflicts with concurrent processing, THE Payment_Limit_Monitoring_System SHALL ensure data consistency through proper transaction isolation or retry mechanisms
 5. WHEN system instances restart or fail during settlement processing, THE Payment_Limit_Monitoring_System SHALL maintain data integrity and resume processing without data loss or corruption
 6. THE Payment_Limit_Monitoring_System SHALL provide idempotent settlement processing to handle duplicate settlement submissions without creating inconsistent state
+
+### Requirement 11
+
+**User Story:** As a risk manager, I want to update exposure limits frequently without system performance impact, so that I can respond quickly to changing market conditions and risk profiles.
+
+#### Acceptance Criteria
+
+1. WHEN an exposure limit is updated for any counterparty, THE Payment_Limit_Monitoring_System SHALL apply the new limit to all settlement status calculations immediately without requiring database record updates
+2. WHEN a limit change affects thousands of settlements, THE Payment_Limit_Monitoring_System SHALL complete the limit update operation within 5 seconds regardless of the number of affected settlements
+3. WHEN multiple limit updates occur within a short time period, THE Payment_Limit_Monitoring_System SHALL handle concurrent limit changes without performance degradation
+4. WHEN a limit is updated during peak processing periods, THE Payment_Limit_Monitoring_System SHALL maintain normal query response times for settlement status requests
+5. THE Payment_Limit_Monitoring_System SHALL provide immediate feedback to users when settlement statuses change due to limit updates, without requiring manual refresh or recalculation requests
+
+#### Example Scenario
+
+**Initial State:**
+- Settlement Group ABC (PTS1, PE1, Counterparty_X, 2024-01-15) has subtotal = 480M USD
+- Current exposure limit for Counterparty_X = 500M USD  
+- Group contains 10,000 individual settlements
+- All 10,000 settlements currently have status CREATED (within limit)
+
+**Limit Update Event:**
+- Risk manager updates Counterparty_X limit from 500M USD to 450M USD
+- New condition: 480M USD > 450M USD (group now exceeds limit)
+
+**System Response (Required):**
+- Limit update completes within 5 seconds
+- Next status query for any settlement in Group ABC returns BLOCKED
+- No database record updates required for the 10,000 settlements
+- All settlement status queries reflect new limit immediately
+- System maintains normal response times during the update
+
+**Performance Comparison:**
+- Traditional approach: Update 10,000 settlement records (30-60 seconds)
+- Required approach: Update limit configuration only (< 5 seconds)
 
 ### Requirement 9
 

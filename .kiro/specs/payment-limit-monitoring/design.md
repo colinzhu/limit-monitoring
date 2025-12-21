@@ -4,6 +4,8 @@
 
 The Payment Limit Monitoring System is a high-performance financial risk management application designed to process up to 200,000 settlements within 30 minutes during peak trading periods. The system aggregates settlement data by counterparty groups, applies configurable filtering rules, and enforces exposure limits through a two-step approval workflow.
 
+The system handles settlements with different directions (PAY/RECEIVE) and types (NET/GROSS), calculating risk exposure only from PAY settlements with active business status (PENDING, INVALID, or VERIFIED). CANCELLED settlements and RECEIVE settlements are excluded from risk calculations but remain visible for operational transparency.
+
 The architecture emphasizes real-time processing, data consistency, and operational transparency while maintaining audit trails for regulatory compliance. The system integrates with multiple external systems including Primary Trading Systems (PTS), rule engines, exchange rate providers, and limit management systems.
 
 ## Architecture
@@ -212,15 +214,16 @@ Benefits of Idempotent Approach:
 
 Instead of trying to solve complex race conditions with locks and atomic operations, let's use a fundamentally different approach that eliminates the problems entirely.
 
-#### Core Insight: Don't Calculate - Just Store Events
+#### Core Insight: Separate Write Operations from Read Operations
 
-**The Problem with Current Approach**: We're trying to maintain real-time calculated state (subtotals, statuses) which creates all the race condition complexity.
+**The Problem with Traditional Approach**: Calculating subtotals on-demand by querying all settlements every time is too slow for high-volume systems.
 
-**Simple Solution**: Store settlement events in order, calculate everything on-demand from the event stream.
+**Solution**: Pre-calculate and store the results in optimized tables that are updated in the background.
 
-#### New Architecture: Event Sourcing with Materialized Views
+#### Architecture: Event Store with Pre-Computed Summary Tables
 
-**1. Settlement Event Store**
+**1. Settlement Event Store (Write-Only)**
+When settlements arrive, we just store them as events - no calculations:
 ```typescript
 interface SettlementEvent {
   eventId: string;
@@ -236,70 +239,176 @@ interface SettlementEvent {
     valueDate: Date;
     currency: string;
     amount: number;
+    direction: 'PAY' | 'RECEIVE';
+    type: 'NET' | 'GROSS';
+    businessStatus: 'PENDING' | 'INVALID' | 'VERIFIED' | 'CANCELLED';
   };
 }
 ```
 
-**2. Background Calculation Service**
-- Single-threaded processor that reads events in order
-- Calculates group subtotals sequentially (no race conditions possible)
-- Updates materialized views with current state
-- Runs every few seconds, processes all new events
-
-**3. Materialized Views (Read-Only)**
+**2. Pre-Computed Summary Tables (Read-Only)**
+Background processes calculate and store results in optimized tables:
 ```typescript
+// This table stores pre-calculated group subtotals
 interface GroupSubtotal {
   groupId: string;
   pts: string;
   processingEntity: string;
   counterpartyId: string;
   valueDate: Date;
-  subtotalUsd: number;
-  lastProcessedEventId: string;
-  calculatedAt: Date;
+  subtotalUsd: number;           // Pre-calculated!
+  settlementCount: number;       // Pre-calculated!
+  lastCalculatedAt: Date;
 }
 
-interface SettlementStatus {
+// Settlement status is computed on-demand, not stored
+// Only approval actions are stored
+interface SettlementApproval {
   settlementId: string;
-  currentVersion: number;
-  status: 'CREATED' | 'BLOCKED' | 'PENDING_AUTHORISE' | 'AUTHORISED';
-  groupSubtotal: number;
-  exposureLimit: number;
+  requestedBy?: string;
+  requestedAt?: Date;
+  authorizedBy?: string;
+  authorizedAt?: Date;
 }
 ```
+
+**3. Background Calculation Service**
+- Single-threaded processor that reads new events every 5 seconds
+- Calculates group subtotals sequentially (no race conditions possible)
+- Updates the pre-computed summary tables
+- Much simpler than complex locking mechanisms
 
 #### How This Solves All Problems
 
 **Race Conditions**: Eliminated - single-threaded processing in event order
 **Out-of-Order Processing**: Handled - events are processed by `processingOrder`, not arrival time
 **Version Updates**: Simple - just another event in the stream
-**Mass Updates**: Eliminated - no stored status fields to update
-**Performance**: Excellent - writes are just appends, reads are from materialized views
+**Performance**: Excellent - writes are just appends, reads are fast lookups + simple computation
+**Mass Updates**: Eliminated - no individual settlement status fields to update
+**Limit Changes**: Instant - status computed with new limits, no database updates needed
 
 #### Processing Flow
 
-**1. Settlement Ingestion (Fast)**
+**1. Settlement Ingestion (Very Fast)**
 ```
-Receive Settlement → Validate → Append to Event Store → Return ACK
-(No calculations, no locks, just append - extremely fast)
+Receive Settlement → Validate → Store as Event → Return ACK
+(No calculations, no locks, just store - extremely fast)
 ```
 
-**2. Background Processing (Sequential)**
+**2. Background Processing (Every 5 seconds)**
 ```
-Every 5 seconds:
 1. Read new events in processingOrder
 2. For each event:
-   - Apply filtering rules (current rules)
-   - Update group subtotal (no race conditions - single thread)
+   - Apply current filtering rules
+   - Update group subtotal in summary table
    - Calculate status based on current limits
-   - Update materialized views
+   - Update settlement status in summary table
 3. Mark events as processed
 ```
 
-**3. Query Processing (Fast)**
+**3. Query Processing (Instant)**
 ```
-UI/API Queries → Read from Materialized Views → Return Results
-(No calculations needed, just read pre-computed state)
+UI/API Queries → Read from Summary Tables → Return Results
+(No calculations needed, just read pre-computed values)
+```
+
+#### Challenge: Limit Updates and Mass Recalculation
+
+**The Problem**: When exposure limits change, we need to recalculate the status for all settlements. With millions of settlements, updating the settlement_status table would be very slow.
+
+**Solution - Dynamic Status Computation with Caching**:
+
+Instead of storing settlement status in a table, we compute it on-demand but cache the results:
+
+```typescript
+// Don't store status in database - compute it dynamically
+function getSettlementStatus(settlementId: string): SettlementStatus {
+  const settlement = getSettlement(settlementId);
+  const groupSubtotal = getGroupSubtotal(settlement.groupId); // From materialized view
+  const exposureLimit = getCurrentLimit(settlement.counterpartyId); // From config
+  
+  // Check if there are approval actions
+  const approvalRecord = getApprovalRecord(settlementId);
+  
+  // Compute status based on current data
+  if (approvalRecord?.authorizedAt) return 'AUTHORISED';
+  if (approvalRecord?.requestedAt) return 'PENDING_AUTHORISE';
+  
+  // For PAY settlements with eligible business status
+  if (settlement.direction === 'PAY' && 
+      ['PENDING', 'INVALID', 'VERIFIED'].includes(settlement.businessStatus)) {
+    return groupSubtotal > exposureLimit ? 'BLOCKED' : 'CREATED';
+  }
+  
+  // RECEIVE settlements and CANCELLED settlements are always CREATED
+  return 'CREATED';
+}
+```
+
+**Key Design Principle: Store What's Expensive, Compute What's Cheap**
+
+**What We Store (Materialized Views):**
+- ✅ Group subtotals (expensive to calculate, changes only when settlements change)
+- ✅ Settlement basic data (direction, business status, etc.)
+- ✅ Approval actions (REQUEST RELEASE, AUTHORISE)
+
+**What We Compute On-Demand:**
+- ✅ Settlement status (cheap to compute: just compare group subtotal vs limit)
+- ✅ Whether group exceeds limit
+
+**Caching Strategy:**
+```typescript
+// Cache status for 30 seconds to avoid repeated calculations
+const statusCache = new Map<string, {status: string, cachedAt: Date}>();
+
+function getCachedSettlementStatus(settlementId: string): SettlementStatus {
+  const cached = statusCache.get(settlementId);
+  if (cached && (Date.now() - cached.cachedAt.getTime()) < 30000) {
+    return cached.status;
+  }
+  
+  const status = getSettlementStatus(settlementId);
+  statusCache.set(settlementId, {status, cachedAt: new Date()});
+  return status;
+}
+```
+
+**Benefits of This Approach:**
+- **Limit Updates**: When limits change, no database updates needed - status is computed with new limits immediately
+- **Performance**: Group subtotals are still pre-calculated (the expensive part)
+  - Group subtotal lookup: ~1ms (from materialized view)
+  - Status computation: ~1ms (simple comparison)
+  - Total: ~2ms per query (still very fast)
+- **Consistency**: Status always reflects current limits and group subtotals
+- **Scalability**: No mass database updates when configuration changes
+
+**When Limits Change:**
+1. Update the limit configuration
+2. Clear the status cache
+3. Next status queries automatically use new limits
+4. No database recalculation needed!
+
+**Example Scenario:**
+```
+Initial State:
+- Group ABC has subtotal = 480M USD
+- Exposure limit = 500M USD
+- 10,000 settlements in this group
+- All settlements have status CREATED
+
+Limit Changes to 450M USD:
+
+Traditional Approach (SLOW):
+- Update 10,000 settlement records: status = BLOCKED
+- Database writes: 10,000 UPDATE statements
+- Time: 30-60 seconds
+
+Our Approach (INSTANT):
+- Update limit configuration: 450M USD
+- Clear status cache
+- Next query computes: 480M > 450M = BLOCKED
+- Database writes: 0
+- Time: < 1 second
 ```
 
 #### Benefits of This Approach
@@ -310,18 +419,6 @@ UI/API Queries → Read from Materialized Views → Return Results
 **Auditability**: Complete event history for compliance
 **Scalability**: Can replay events to rebuild state, easy to debug
 **Flexibility**: Can change calculation logic and replay events
-
-#### Handling High Volume
-
-**Event Ingestion**: Can handle 200K settlements in 30 minutes easily (just appends)
-**Processing Lag**: 5-second processing window means status updates appear within 5-10 seconds
-**Scaling**: If processing can't keep up, add more background processors (partition by group)
-
-#### Real-Time Requirements
-
-**Status Updates**: Available within 5-10 seconds (acceptable per requirements)
-**API Queries**: Instant (reading materialized views)
-**Approval Actions**: Update approval table immediately, status recalculated in next cycle
 
 This approach is much simpler, more reliable, and easier to understand than complex concurrency control mechanisms.
 
@@ -346,29 +443,37 @@ This approach provides several key benefits:
 ### Settlement Ingestion Service
 **Responsibilities:**
 - Receive settlement flows from PTS endpoints
-- Validate settlement data structure and completeness
+- Validate settlement data structure and completeness including direction, type, and business status
 - Apply filtering rules to determine calculation eligibility
 - Store settlements with versioning support
-- Trigger aggregation calculations
+- Handle out-of-order settlement version processing using version numbers
+- Trigger aggregation calculations for eligible settlements
 
 **Key Interfaces:**
 ```
 POST /api/settlements/ingest
-- Accepts settlement data from PTS systems
+- Accepts settlement data from PTS systems including direction, type, and business status
 - Returns acknowledgment with processing status
 
 GET /api/settlements/{settlementId}/status
-- Returns current settlement status and details
+- Returns current settlement status and details including direction and business status
 - Used by external systems for status queries
 ```
 
+**Business Logic:**
+- Only PAY settlements with business status PENDING, INVALID, or VERIFIED are eligible for subtotal calculations
+- RECEIVE settlements and CANCELLED settlements are stored but excluded from risk calculations
+- NET settlements can change direction between PAY and RECEIVE based on underlying settlement updates
+- Settlement versions are processed based on version number, not arrival order
+
 ### Aggregation Engine
 **Responsibilities:**
-- Group settlements by PTS, Processing Entity, Counterparty ID, and Value Date
+- Group PAY settlements with eligible business status by PTS, Processing Entity, Counterparty ID, and Value Date
 - Convert currencies to USD using latest exchange rates
-- Calculate and maintain group subtotals
+- Calculate and maintain group subtotals from PAY settlements with business status PENDING, INVALID, or VERIFIED
 - Handle settlement version updates and group migrations
-- Compute settlement eligibility using current filtering rules
+- Compute settlement eligibility using current filtering rules and business status
+- Handle direction changes for NET settlements
 
 **Key Operations:**
 - Real-time subtotal calculation (< 10 seconds) using materialized group totals
@@ -376,6 +481,14 @@ GET /api/settlements/{settlementId}/status
 - Dynamic currency conversion with latest available rates
 - Efficient handling of high-volume updates without mass settlement record updates
 - On-demand status computation to avoid performance bottlenecks
+- Complete group recalculation rather than incremental updates to ensure accuracy
+
+**Business Logic:**
+- Only PAY settlements contribute to subtotal calculations
+- CANCELLED settlements are excluded regardless of direction
+- RECEIVE settlements are excluded regardless of business status
+- NET settlements require special handling for direction changes
+- Complete recalculation ensures accuracy when settlement amounts change or eligibility changes
 
 **Performance Optimizations:**
 - Maintain materialized subtotals at group level only
@@ -407,15 +520,21 @@ Instead of tracking deltas between versions, we recalculate the entire settlemen
 ### Limit Monitoring Service
 **Responsibilities:**
 - Compare group subtotals against exposure limits
-- Compute settlement status dynamically based on group state and approval records
+- Compute settlement status dynamically based on group state, approval records, and business status
 - Handle limit updates and re-evaluation at group level
 - Support both fixed limits (MVP) and counterparty-specific limits
 
 **Status Computation Logic:**
-- CREATED: Group subtotal within limit AND no approval record exists
-- BLOCKED: Group subtotal exceeds limit AND no approval record exists  
-- PENDING_AUTHORISE: Approval record exists with REQUEST RELEASE action
-- AUTHORISED: Approval record exists with both REQUEST RELEASE and AUTHORISE actions
+- CREATED: (Group subtotal within limit OR settlement is RECEIVE OR settlement is CANCELLED) AND no approval record exists
+- BLOCKED: Settlement is PAY with business status PENDING/INVALID/VERIFIED AND group subtotal exceeds limit AND no approval record exists  
+- PENDING_AUTHORISE: Approval record exists with REQUEST RELEASE action (only for VERIFIED settlements)
+- AUTHORISED: Approval record exists with both REQUEST RELEASE and AUTHORISE actions (only for VERIFIED settlements)
+
+**Business Rules:**
+- Only VERIFIED settlements are eligible for manual approval workflow
+- PENDING and INVALID settlements show as BLOCKED but cannot be manually approved until VERIFIED
+- RECEIVE settlements automatically get CREATED status regardless of group subtotal
+- CANCELLED settlements automatically get CREATED status and are excluded from group subtotals
 
 **Performance Considerations:**
 - Status computed on-demand to avoid mass updates when group totals fluctuate
@@ -425,11 +544,17 @@ Instead of tracking deltas between versions, we recalculate the entire settlemen
 
 ### Approval Workflow Service
 **Responsibilities:**
-- Enforce two-person approval process
+- Enforce two-person approval process for VERIFIED settlements only
 - Prevent same user from performing both REQUEST RELEASE and AUTHORISE
 - Maintain comprehensive audit trails
-- Handle bulk operations on same-group settlements
-- Reset approvals when settlement versions change
+- Handle bulk operations on same-group VERIFIED settlements
+- Reset approvals when settlement versions change business status or direction
+
+**Business Rules:**
+- Only VERIFIED PAY settlements that are BLOCKED can be manually approved
+- PENDING and INVALID settlements cannot be approved until they become VERIFIED
+- RECEIVE and CANCELLED settlements do not require approval workflow
+- Approval actions are reset when settlement business status changes from VERIFIED
 
 **Audit Trail Fields:**
 - User identity and timestamp
@@ -455,6 +580,9 @@ interface SettlementEvent {
     valueDate: Date;
     currency: string;
     amount: number;
+    direction: 'PAY' | 'RECEIVE';
+    type: 'NET' | 'GROSS';
+    businessStatus: 'PENDING' | 'INVALID' | 'VERIFIED' | 'CANCELLED';
   };
   processed: boolean;
   processedAt?: Date;
@@ -486,6 +614,9 @@ interface SettlementView {
   valueDate: Date;
   currency: string;
   amount: number;
+  direction: 'PAY' | 'RECEIVE';
+  type: 'NET' | 'GROSS';
+  businessStatus: 'PENDING' | 'INVALID' | 'VERIFIED' | 'CANCELLED';
   usdAmount: number;
   status: SettlementStatus;
   groupId: string;
@@ -570,74 +701,78 @@ interface FilteringRule {
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system-essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
+## Correctness Properties
+
+*A property is a characteristic or behavior that should hold true across all valid executions of a system-essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+
 Based on the requirements analysis, the following correctness properties must be maintained by the Payment Limit Monitoring System:
 
 ### Data Management Properties
 
 **Property 1: Settlement Storage Completeness**
-*For any* valid settlement data received, the system should store all required fields (PTS, Processing_Entity, Counterparty_ID, Value_Date, Currency, Amount, Settlement_ID, Settlement_Version) without loss or corruption
+*For any* valid settlement data received, the system should store all required fields (PTS, Processing_Entity, Counterparty_ID, Value_Date, Currency, Amount, Settlement_ID, Settlement_Version, Settlement_Direction, Settlement_Type, Business_Status) without loss or corruption
 **Validates: Requirements 1.1**
 
 **Property 2: Filtering Rule Application**
 *For any* settlement and current filtering rules, the system should correctly determine eligibility for subtotal calculations based on the rule criteria
 **Validates: Requirements 1.2**
 
-**Property 3: Version Management**
-*For any* settlement with multiple versions, only the latest version should be active in calculations while all historical versions remain accessible for audit
-**Validates: Requirements 1.5**
+**Property 3: Settlement Inclusion Logic**
+*For any* settlement, it should be included in subtotal calculations if and only if it has direction PAY, business status is PENDING/INVALID/VERIFIED, and matches current filtering rules
+**Validates: Requirements 1.3, 1.4, 1.6**
 
-**Property 4: Data Preservation**
-*For any* settlement stored, the original currency and amount values should remain unchanged after storage operations
-**Validates: Requirements 1.6**
+**Property 4: Version Management**
+*For any* settlement with multiple versions, only the latest version based on Settlement_Version number should be active in calculations while all historical versions remain accessible for audit
+**Validates: Requirements 1.5, 10.2**
 
-**Property 5: Invalid Data Rejection**
-*For any* settlement with invalid or incomplete data, the system should reject it and not include it in any calculations
-**Validates: Requirements 1.7**
+**Property 5: Business Status Change Handling**
+*For any* settlement that changes business status between CANCELLED and non-CANCELLED states, the group subtotal should be recalculated to reflect the new inclusion status
+**Validates: Requirements 1.9, 1.10**
+
+**Property 6: Idempotent Processing**
+*For any* settlement submitted multiple times with the same Settlement_ID and Settlement_Version, the system state should remain consistent and not create duplicate effects
+**Validates: Requirements 10.6**
 
 ### Aggregation and Calculation Properties
 
-**Property 6: Settlement Grouping**
-*For any* set of settlements, those with identical PTS, Processing_Entity, Counterparty_ID, and Value_Date should be grouped together
+**Property 7: Settlement Grouping**
+*For any* set of PAY settlements with eligible business status, those with identical PTS, Processing_Entity, Counterparty_ID, and Value_Date should be grouped together
 **Validates: Requirements 2.1**
 
-**Property 7: Subtotal Calculation Accuracy**
-*For any* group of settlements, the subtotal should equal the sum of USD-converted amounts for all eligible settlements in the group
-**Validates: Requirements 2.2**
+**Property 8: Complete Subtotal Recalculation**
+*For any* group subtotal calculation, the result should equal the sum of USD-converted amounts for all currently eligible settlements in the group, using complete recalculation rather than incremental updates
+**Validates: Requirements 2.2, 2.4**
 
-**Property 8: Incremental Subtotal Updates**
-*For any* existing group, adding a new eligible settlement should increase the subtotal by exactly the USD equivalent of the new settlement's amount
-**Validates: Requirements 2.3**
-
-**Property 9: Version Update Consistency**
-*For any* settlement version update, the group subtotal should reflect only the new version's amount and exclude the previous version's contribution
-**Validates: Requirements 2.4**
+**Property 9: NET Settlement Direction Changes**
+*For any* NET settlement that changes direction between PAY and RECEIVE, the group subtotal should be recalculated to reflect the current direction and inclusion status
+**Validates: Requirements 2.6**
 
 **Property 10: Group Migration Accuracy**
 *For any* settlement that changes group keys (PTS, Processing_Entity, Counterparty_ID, or Value_Date), it should be removed from the old group and added to the correct new group, with both subtotals recalculated accurately
-**Validates: Requirements 2.5**
+**Validates: Requirements 2.7**
 
 ### Status Management Properties
 
-**Property 11: Status Assignment for Compliant Groups**
-*For any* settlement in a group where the subtotal is within the exposure limit, the settlement status should be CREATED
-**Validates: Requirements 3.1**
+**Property 11: Status Assignment Based on Risk Contribution**
+*For any* settlement, its status should be CREATED if it doesn't contribute to risk exposure (RECEIVE direction, CANCELLED status, or group within limit) and BLOCKED if it contributes to risk exposure and group exceeds limit
+**Validates: Requirements 3.1, 3.2, 3.3**
 
-**Property 12: Status Assignment for Exceeding Groups**
-*For any* settlement in a group where the subtotal exceeds the exposure limit, the settlement status should be BLOCKED
-**Validates: Requirements 3.2**
-
-**Property 13: Limit Change Re-evaluation**
+**Property 12: Limit Change Re-evaluation**
 *For any* exposure limit update, all settlements should be re-evaluated and their statuses should reflect the new limit comparison
-**Validates: Requirements 3.3**
+**Validates: Requirements 3.6**
 
-**Property 14: Status Reset on Version Change**
-*For any* settlement that receives a new version after approval actions, the status should reset to CREATED or BLOCKED based on the current group subtotal, invalidating previous approvals
-**Validates: Requirements 2.6, 4.5**
+**Property 13: Status Reset on Version Change**
+*For any* settlement that receives a new version affecting its risk contribution, the status should reset based on the current group subtotal and business rules, invalidating previous approvals
+**Validates: Requirements 2.8, 4.5**
 
 ### Approval Workflow Properties
 
+**Property 14: VERIFIED Settlement Approval Eligibility**
+*For any* BLOCKED settlement, REQUEST RELEASE functionality should be available if and only if the settlement has business status VERIFIED
+**Validates: Requirements 4.1, 4.6**
+
 **Property 15: REQUEST RELEASE Transition**
-*For any* BLOCKED settlement, a REQUEST RELEASE action should change the status to PENDING_AUTHORISE and create an audit record
+*For any* BLOCKED VERIFIED settlement, a REQUEST RELEASE action should change the status to PENDING_AUTHORISE and create an audit record
 **Validates: Requirements 4.2**
 
 **Property 16: AUTHORISE Transition**
@@ -649,7 +784,7 @@ Based on the requirements analysis, the following correctness properties must be
 **Validates: Requirements 4.4**
 
 **Property 18: Bulk Action Consistency**
-*For any* bulk operation on settlements from the same group, each settlement should receive the action and have an individual audit entry created
+*For any* bulk operation on VERIFIED settlements from the same group, each settlement should receive the action and have an individual audit entry created
 **Validates: Requirements 4.7**
 
 **Property 19: Audit Trail Completeness**
@@ -659,21 +794,21 @@ Based on the requirements analysis, the following correctness properties must be
 ### Search and Query Properties
 
 **Property 20: Search Filter Accuracy**
-*For any* search criteria (PTS, Processing_Entity, Value_Date, Counterparty_ID), the results should contain only settlements that match all specified criteria
-**Validates: Requirements 6.1, 6.3**
+*For any* search criteria including direction, type, and business status, the results should contain only settlements that match all specified criteria
+**Validates: Requirements 6.1**
 
 **Property 21: Limit Status Filtering**
-*For any* limit status filter (exceeds/does not exceed), the results should contain only settlements whose groups match the specified limit relationship
+*For any* limit status filter, the results should contain only PAY settlements whose groups match the specified limit relationship
 **Validates: Requirements 6.2**
 
 **Property 22: Group Selection Display**
-*For any* selected settlement group, the detail view should display all and only the settlements that belong to that specific group
+*For any* selected settlement group, the detail view should display all settlements (regardless of direction or business status) that belong to that specific group
 **Validates: Requirements 6.8**
 
 ### API and Integration Properties
 
 **Property 23: Status Query Accuracy**
-*For any* valid Settlement_ID queried via API, the system should return the current accurate status and relevant details
+*For any* valid Settlement_ID queried via API, the system should return the current accurate status and relevant details including direction, type, and business status
 **Validates: Requirements 7.1**
 
 **Property 24: Authorization Notification**
@@ -681,7 +816,7 @@ Based on the requirements analysis, the following correctness properties must be
 **Validates: Requirements 7.6**
 
 **Property 25: Manual Recalculation Scope**
-*For any* manual recalculation request with scope criteria, all and only the settlements matching the criteria should have their subtotals recalculated using current rules and limits
+*For any* manual recalculation request with scope criteria, all and only the settlements matching the criteria should have their subtotals recalculated using current rules and limits, considering only PAY settlements with eligible business status
 **Validates: Requirements 7.7, 7.8**
 
 ### Configuration and Rate Management Properties
@@ -696,7 +831,17 @@ Based on the requirements analysis, the following correctness properties must be
 
 **Property 28: Counterparty Limit Application**
 *For any* settlement in advanced mode, the correct counterparty-specific exposure limit should be applied based on the settlement's Counterparty_ID
-**Validates: Requirements 8.2**
+**Validates: Requirements 8.6**
+
+### Audit and Compliance Properties
+
+**Property 29: Historical Data Accessibility**
+*For any* settlement, all versions and their timestamps should remain accessible for audit and compliance queries, including direction, type, and business status information
+**Validates: Requirements 9.1**
+
+**Property 30: Audit Trail Immutability**
+*For any* historical audit record, it should remain unmodifiable and accessible throughout the compliance retention period
+**Validates: Requirements 9.5**idates: Requirements 8.2**
 
 ### Audit and Compliance Properties
 
