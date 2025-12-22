@@ -30,8 +30,8 @@ The Payment Limit Monitoring System is a financial risk management application t
 - **Operation_Team**: Users responsible for reviewing and approving settlements that exceed limits
 - **CREATED**: Settlement status when the group subtotal is within the exposure limit
 - **BLOCKED**: Settlement status when the group subtotal exceeds the exposure limit
-- **PENDING_AUTHORISE**: Settlement status after an operation team member requests release but before authorization
-- **AUTHORISED**: Settlement status after a second operation team member authorizes the release
+- **PENDING_AUTHORISE**: Settlement status after an operation team member requests release but before authorization, linked to a specific settlement version
+- **AUTHORISED**: Settlement status after a second operation team member authorizes the release, linked to a specific settlement version
 - **Exchange_Rate**: Currency conversion rate automatically fetched from external systems and used for USD equivalent calculations
 - **Filtering_Rules**: Configurable criteria stored in an external rule system that determine which settlements should be included in subtotal calculations
 - **Rule_System**: External system that manages and provides filtering rules for settlement inclusion criteria
@@ -102,14 +102,17 @@ The Payment Limit Monitoring System is a financial risk management application t
 #### Acceptance Criteria
 
 1. WHEN viewing BLOCKED settlements, THE Payment_Limit_Monitoring_System SHALL display only PAY settlements with business status VERIFIED that are blocked due to limit exceedance, along with settlement details and group information including PTS, Processing_Entity, Counterparty_ID, Value_Date, Settlement_Direction, Settlement_Type, Business_Status, and current group subtotal
-2. WHEN an operation team member clicks REQUEST RELEASE for a BLOCKED PAY settlement with business status VERIFIED, THE Payment_Limit_Monitoring_System SHALL change the settlement status to PENDING_AUTHORISE and record the action with user identity and timestamp
-3. WHEN a different operation team member clicks AUTHORISE for a PENDING_AUTHORISE settlement with business status VERIFIED, THE Payment_Limit_Monitoring_System SHALL change the settlement status to AUTHORISED and record the action with user identity and timestamp
+2. WHEN an operation team member clicks REQUEST RELEASE for a BLOCKED PAY settlement with business status VERIFIED, THE Payment_Limit_Monitoring_System SHALL require a mandatory comment explaining the reason for the request, change the settlement status to PENDING_AUTHORISE, and record the action with user identity, timestamp, comment, and the specific settlement version being approved
+3. WHEN a different operation team member clicks AUTHORISE for a PENDING_AUTHORISE settlement with business status VERIFIED, THE Payment_Limit_Monitoring_System SHALL require a mandatory comment explaining the authorization decision, change the settlement status to AUTHORISED, and record the action with user identity, timestamp, comment, and the specific settlement version being approved
 4. WHEN the same operation team member attempts to perform both REQUEST RELEASE and AUTHORISE actions on the same settlement, THE Payment_Limit_Monitoring_System SHALL prevent the action and display an error message
-5. WHEN a settlement receives a new version that changes its business status from VERIFIED to PENDING, INVALID, or CANCELLED, THE Payment_Limit_Monitoring_System SHALL reset the settlement status based on the new business status and group subtotal, and invalidate all previous approval actions
-6. WHEN a settlement with business status PENDING or INVALID is blocked due to limit exceedance, THE Payment_Limit_Monitoring_System SHALL display the settlement as BLOCKED but SHALL NOT provide REQUEST RELEASE functionality until the business status becomes VERIFIED
-6. WHEN selecting multiple settlements for bulk actions, THE Payment_Limit_Monitoring_System SHALL only allow selection of VERIFIED settlements that belong to the same group (same PTS, Processing_Entity, Counterparty_ID, and Value_Date)
-7. WHEN performing bulk REQUEST RELEASE or AUTHORISE actions, THE Payment_Limit_Monitoring_System SHALL apply the action to all selected VERIFIED settlements and record individual audit entries for each settlement
-8. THE Payment_Limit_Monitoring_System SHALL maintain a complete audit trail of all user actions including REQUEST RELEASE and AUTHORISE operations with timestamps, user identities, settlement details, and version information for VERIFIED settlements only
+5. WHEN a user attempts to submit a REQUEST RELEASE or AUTHORISE action without providing a comment, THE Payment_Limit_Monitoring_System SHALL prevent the action and display a validation error requiring comment input
+6. WHEN a settlement receives a new version that changes its business status from VERIFIED to PENDING, INVALID, or CANCELLED, THE Payment_Limit_Monitoring_System SHALL reset the settlement status based on the new business status and group subtotal, and invalidate all previous approval actions
+7. WHEN a settlement receives a new version (regardless of content changes), THE Payment_Limit_Monitoring_System SHALL treat it as a new settlement for approval purposes, and any approval actions taken on previous versions SHALL NOT apply to the new version
+8. WHEN a settlement with business status PENDING or INVALID is blocked due to limit exceedance, THE Payment_Limit_Monitoring_System SHALL display the settlement as BLOCKED but SHALL NOT provide REQUEST RELEASE functionality until the business status becomes VERIFIED
+9. WHEN selecting multiple settlements for bulk actions, THE Payment_Limit_Monitoring_System SHALL only allow selection of VERIFIED settlements that belong to the same group (same PTS, Processing_Entity, Counterparty_ID, and Value_Date)
+10. WHEN performing bulk REQUEST RELEASE or AUTHORISE actions, THE Payment_Limit_Monitoring_System SHALL require a single comment that applies to all selected settlements, apply the action to all selected VERIFIED settlements, and record individual audit entries for each settlement with their specific versions and the shared comment
+11. THE Payment_Limit_Monitoring_System SHALL maintain a complete audit trail of all user actions including REQUEST RELEASE and AUTHORISE operations with timestamps, user identities, mandatory comments, settlement details, and the specific settlement version that was approved
+12. WHEN querying approval history, THE Payment_Limit_Monitoring_System SHALL clearly indicate which settlement version each approval action was taken against, including the user comment, ensuring traceability between approvals and specific settlement versions
 
 ### Requirement 5
 
@@ -136,8 +139,11 @@ The Payment Limit Monitoring System is a financial risk management application t
 5. THE Payment_Limit_Monitoring_System SHALL provide search results in a paginated format for efficient browsing of large result sets
 6. WHEN users want to export search results, THE Payment_Limit_Monitoring_System SHALL allow downloading the filtered settlements as an Excel file containing all relevant settlement details and status information for settlements of all directions and business statuses
 7. WHEN displaying the user interface, THE Payment_Limit_Monitoring_System SHALL show settlement groups in the upper section and individual settlements in the lower section, including settlements of all directions and business statuses for complete visibility
-8. WHEN a user clicks on a settlement group in the upper section, THE Payment_Limit_Monitoring_System SHALL display all settlements belonging to that group in the lower section with their individual details, statuses, direction, and business status indicators
-9. WHEN displaying settlement information, THE Payment_Limit_Monitoring_System SHALL show sufficient context including settlement direction, type, and business status, group subtotal in USD calculated from PAY settlements with business status not CANCELLED, exposure limit, current exchange rates as reference for currency conversion, and filtering rule application status to explain why PAY settlements are BLOCKED or not BLOCKED
+8. WHEN a user clicks on a settlement group in the upper section, THE Payment_Limit_Monitoring_System SHALL display all settlements belonging to that group in the lower section with their individual details, statuses, direction, and business status indicators, showing only the latest version of each settlement
+9. WHEN a user clicks on an individual settlement in the lower section, THE Payment_Limit_Monitoring_System SHALL display a side panel with detailed settlement information organized in tabs
+10. WHEN displaying the side panel for a settlement, THE Payment_Limit_Monitoring_System SHALL provide an audit trail tab that shows the complete action history for all versions of the settlement (same Settlement_ID)
+11. WHEN displaying the audit trail tab, THE Payment_Limit_Monitoring_System SHALL include CREATE actions that indicate when each settlement version was received, along with all approval actions (REQUEST RELEASE, AUTHORISE) taken on any version
+12. WHEN displaying settlement information, THE Payment_Limit_Monitoring_System SHALL show sufficient context including settlement direction, type, and business status, group subtotal in USD calculated from PAY settlements with business status not CANCELLED, exposure limit, current exchange rates as reference for currency conversion, and filtering rule application status to explain why PAY settlements are BLOCKED or not BLOCKED
 
 ### Requirement 7
 
@@ -216,6 +222,18 @@ The Payment Limit Monitoring System is a financial risk management application t
 **Performance Comparison:**
 - Traditional approach: Update 10,000 settlement records (30-60 seconds)
 - Required approach: Update limit configuration only (< 5 seconds)
+
+### Requirement 12
+
+**User Story:** As an operations team member, I want to view comprehensive audit trails for settlements, so that I can understand the complete history of settlement versions and approval actions.
+
+#### Acceptance Criteria
+
+1. WHEN a settlement is received for the first time, THE Payment_Limit_Monitoring_System SHALL create a CREATE audit record with the settlement version, timestamp, and system identity
+2. WHEN a settlement receives a new version, THE Payment_Limit_Monitoring_System SHALL create a CREATE audit record for the new version while preserving all historical audit records
+3. WHEN displaying the audit trail for a settlement, THE Payment_Limit_Monitoring_System SHALL show all actions across all versions of the same Settlement_ID in chronological order
+4. WHEN displaying audit trail entries, THE Payment_Limit_Monitoring_System SHALL clearly indicate the settlement version, action type (CREATE, REQUEST RELEASE, AUTHORISE), user identity (or system for CREATE actions), timestamp, user comment (for approval actions), and relevant context
+5. THE Payment_Limit_Monitoring_System SHALL maintain audit trail completeness ensuring no settlement version or approval action is missing from the historical record
 
 ### Requirement 9
 

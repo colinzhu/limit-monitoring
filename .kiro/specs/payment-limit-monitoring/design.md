@@ -73,142 +73,87 @@ The system design addresses several critical performance and concurrency challen
 #### Challenge 4: Race Conditions in Concurrent Subtotal Calculations
 **Problem**: When multiple settlements for the same group arrive within milliseconds, each triggers a subtotal calculation. Without proper concurrency control, these calculations can overwrite each other randomly, leading to incorrect subtotals.
 
-**Solution - Atomic Increment Operations**:
-Instead of reading-calculating-updating, use atomic database operations that work with deltas:
+**Solution - Event-Driven Sequential Processing**:
+Instead of trying to handle concurrent calculations with complex locking, we eliminate the race conditions entirely using our event-driven architecture:
 
-```sql
--- Atomic increment approach - add new settlement
-UPDATE settlement_groups 
-SET subtotal_usd = subtotal_usd + ?, 
-    settlement_count = settlement_count + 1,
-    version = version + 1, 
-    last_calculated_at = NOW()
-WHERE group_id = ?
-
--- Atomic update approach - replace settlement version
-UPDATE settlement_groups 
-SET subtotal_usd = subtotal_usd - ? + ?, -- subtract old, add new
-    version = version + 1,
-    last_calculated_at = NOW()
-WHERE group_id = ?
+```typescript
+// Event-driven approach - no race conditions possible
+class BackgroundCalculationService {
+  processEvents() {
+    // Single-threaded processing eliminates race conditions
+    const newEvents = getUnprocessedEvents(); // Ordered by processingOrder
+    
+    for (const event of newEvents) {
+      // Complete recalculation for affected group
+      const groupId = calculateGroupId(event.settlementData);
+      const newSubtotal = calculateCompleteGroupSubtotal(groupId);
+      
+      // Update materialized view
+      updateGroupSubtotal(groupId, newSubtotal);
+      markEventAsProcessed(event.eventId);
+    }
+  }
+  
+  calculateCompleteGroupSubtotal(groupId: string): number {
+    // Always recalculate from scratch using current rules
+    return SELECT SUM(amount * exchange_rate) 
+           FROM settlements s
+           JOIN exchange_rates r ON s.currency = r.currency
+           WHERE s.group_id = groupId
+             AND s.direction = 'PAY'
+             AND s.business_status IN ('PENDING', 'INVALID', 'VERIFIED')
+             AND s.settlement_version = (
+               SELECT MAX(settlement_version) 
+               FROM settlements s2 
+               WHERE s2.settlement_id = s.settlement_id
+             )
+             AND applyFilteringRules(s) = true;
+  }
+}
 ```
 
-**Detailed Implementation Strategy**:
-1. **New Settlement**: Atomically increment subtotal by the settlement's USD amount
-2. **Settlement Version Update**: Atomically subtract old amount and add new amount in single operation
-3. **Settlement Group Migration**: Use database transaction to atomically decrement from old group and increment to new group
-4. **Eligibility Changes**: When filtering rules change, recalculate entire group subtotal from scratch using SELECT SUM() with current rules
-
-**Fallback for Complex Scenarios**:
-For operations that cannot use atomic increments (like rule changes affecting eligibility), implement distributed locking:
-- Use Redis distributed locks per group_id
-- Lock acquisition timeout: 5 seconds
-- Lock hold time: maximum 30 seconds
-- Implement lock renewal for long-running calculations
+**Why This Eliminates Race Conditions:**
+1. **Single-threaded processing**: Only one calculation happens at a time
+2. **Complete recalculation**: Always calculates from current state, not deltas
+3. **Event ordering**: Events processed in `processingOrder`, not arrival time
+4. **Version handling**: Always uses latest version regardless of processing order
 
 **Race Condition Examples - Solved**:
 
-**Scenario 1: New Settlements**
+**Scenario: Multiple Settlements for Same Group**
 ```
-Initial State: Group has subtotal = 400M USD, count = 5 settlements
+Initial State: Group has subtotal = 400M USD
 
-Concurrent Scenario:
-- Settlement A (100M USD) arrives at time T
-- Settlement B (150M USD) arrives at time T+1ms
+Concurrent Events:
+- Event 1: Settlement A (100M USD) - processingOrder = 1001
+- Event 2: Settlement B (150M USD) - processingOrder = 1002
 
-Old Approach (PROBLEMATIC):
-- Both read: subtotal = 400M, count = 5
-- A calculates: 400M + 100M = 500M, count = 6
-- B calculates: 400M + 150M = 550M, count = 6  
-- Result: Incorrect subtotal (either 500M or 550M, missing one settlement)
-
-New Approach (CORRECT):
-- A executes: UPDATE SET subtotal = subtotal + 100, count = count + 1
-- B executes: UPDATE SET subtotal = subtotal + 150, count = count + 1
-- Result: Correct subtotal = 650M USD, count = 7 settlements
+Event-Driven Processing (CORRECT):
+1. Process Event 1001: Recalculate group subtotal = 500M USD
+2. Process Event 1002: Recalculate group subtotal = 650M USD
+3. Result: Correct subtotal = 650M USD (both settlements included)
 ```
 
-**Scenario 2: Settlement Version Updates (Out-of-Order Processing)**
+**Scenario: Out-of-Order Settlement Versions**
 ```
-Initial State: 
-- Group has subtotal = 500M USD
-- Settlement X version 1: amount = 80M USD (included in subtotal)
+Initial State: Settlement X version 1 (80M USD) in group
 
-Out-of-Order Scenario:
-- Settlement X version 3 (amount = 90M USD) arrives at time T
-- Settlement X version 2 (amount = 120M USD) arrives at time T+1ms
+Out-of-Order Events:
+- Event A: Settlement X version 3 (90M USD) - processingOrder = 2001
+- Event B: Settlement X version 2 (120M USD) - processingOrder = 2002
 
-Challenge: Version 3 arrives before version 2, but version 2 should be ignored since version 3 is newer
-
-Solution - Version-Aware Processing with Compensation:
-
-1. When processing version 3 (arrives first):
-   - Check: Is version 3 > current max version (1)? YES
-   - Read Settlement X version 1: old_amount = 80M
-   - Calculate delta: 90M - 80M = +10M
-   - Execute: UPDATE groups SET subtotal = subtotal + 10 WHERE group_id = ?
-   - Store Settlement X version 3 with amount = 90M
-   - Update max_processed_version = 3
-
-2. When processing version 2 (arrives second):
-   - Check: Is version 2 > current max version (3)? NO
-   - Action: IGNORE - this is a stale version
-   - No group update, no storage
-
-Alternative Implementation - Idempotent Recalculation:
-Instead of delta calculations, use idempotent operations:
-
-```sql
--- For any settlement version update, recalculate the entire settlement's contribution
-BEGIN TRANSACTION;
-
--- Lock the settlement to prevent concurrent updates
-SELECT settlement_id FROM settlements 
-WHERE settlement_id = ? 
-FOR UPDATE;
-
--- Get the current contribution of this settlement to the group
-SELECT COALESCE(SUM(amount * exchange_rate), 0) as current_contribution
-FROM settlements s
-JOIN exchange_rates r ON s.currency = r.from_currency
-WHERE s.settlement_id = ? 
-AND s.settlement_version = (
-    SELECT MAX(settlement_version) 
-    FROM settlements 
-    WHERE settlement_id = s.settlement_id
-);
-
--- Insert/Update the new version (with conflict resolution)
-INSERT INTO settlements (...) VALUES (...)
-ON CONFLICT (settlement_id, settlement_version) 
-DO NOTHING; -- Ignore if already processed
-
--- Calculate new contribution after the insert
-SELECT COALESCE(SUM(amount * exchange_rate), 0) as new_contribution
-FROM settlements s
-JOIN exchange_rates r ON s.currency = r.from_currency  
-WHERE s.settlement_id = ?
-AND s.settlement_version = (
-    SELECT MAX(settlement_version) 
-    FROM settlements 
-    WHERE settlement_id = s.settlement_id
-);
-
--- Apply the net change atomically
-UPDATE settlement_groups 
-SET subtotal_usd = subtotal_usd - current_contribution + new_contribution,
-    version = version + 1
-WHERE group_id = ?;
-
-COMMIT;
+Event-Driven Processing (CORRECT):
+1. Process Event 2001: Store version 3, recalculate group (uses version 3: 90M)
+2. Process Event 2002: Store version 2, recalculate group (still uses version 3: 90M)
+3. Result: Correct subtotal uses latest version (3) regardless of arrival order
 ```
 
-Benefits of Idempotent Approach:
-- Handles out-of-order processing correctly
-- Duplicate processing is safe (idempotent)
-- Always uses the latest version regardless of arrival order
-- Compensates for any previous incorrect calculations
-```
+**Benefits of Event-Driven Approach:**
+- **No Race Conditions**: Single-threaded processing eliminates concurrency issues
+- **Handles Complexity**: Versions, directions, business status changes all handled correctly
+- **Simple Logic**: Complete recalculation is easier to understand and debug
+- **Consistent Results**: Always produces correct subtotal regardless of event timing
+- **Audit Trail**: Complete event history for compliance and debugging
 
 ### Simple Event-Driven Architecture Solution
 
@@ -440,6 +385,30 @@ This approach provides several key benefits:
 
 ## Components and Interfaces
 
+### User Interface Components
+
+**Main Dashboard Layout:**
+- **Upper Section**: Settlement groups with aggregated information (PTS, Processing_Entity, Counterparty_ID, Value_Date, group subtotal, status summary)
+- **Lower Section**: Individual settlements for selected group (latest version only)
+- **Side Panel**: Detailed settlement information with tabbed interface
+
+**Settlement Group Display:**
+- Shows group-level information and subtotal status
+- Clicking a group filters the lower section to show related settlements
+- Only displays latest version of each settlement in the group
+
+**Settlement Detail Side Panel:**
+- **Overview Tab**: Settlement details, current status, group context
+- **Audit Trail Tab**: Complete action history across all versions of the settlement
+- **Version History Tab**: All versions of the settlement with their details
+
+**Audit Trail Tab Requirements:**
+- Shows chronological history of all actions for the Settlement_ID
+- Includes CREATE actions for each version received
+- Includes all approval actions (REQUEST RELEASE, AUTHORISE) with version context and user comments
+- Displays user identity, timestamp, action type, settlement version, and mandatory comments for approval actions
+- Provides complete traceability across settlement lifecycle
+
 ### Settlement Ingestion Service
 **Responsibilities:**
 - Receive settlement flows from PTS endpoints
@@ -542,7 +511,29 @@ Instead of tracking deltas between versions, we recalculate the entire settlemen
 - Group-level limit evaluation prevents individual settlement updates
 - Caching layer reduces computation overhead for frequently queried settlements
 
-### Approval Workflow Service
+### User Interface Components
+
+**Main Dashboard Layout:**
+- **Upper Section**: Settlement groups with aggregated information (PTS, Processing_Entity, Counterparty_ID, Value_Date, group subtotal, status summary)
+- **Lower Section**: Individual settlements for selected group (latest version only)
+- **Side Panel**: Detailed settlement information with tabbed interface
+
+**Settlement Group Display:**
+- Shows group-level information and subtotal status
+- Clicking a group filters the lower section to show related settlements
+- Only displays latest version of each settlement in the group
+
+**Settlement Detail Side Panel:**
+- **Overview Tab**: Settlement details, current status, group context
+- **Audit Trail Tab**: Complete action history across all versions of the settlement
+- **Version History Tab**: All versions of the settlement with their details
+
+**Audit Trail Tab Requirements:**
+- Shows chronological history of all actions for the Settlement_ID
+- Includes CREATE actions for each version received
+- Includes all approval actions (REQUEST RELEASE, AUTHORISE) with version context
+- Displays user identity, timestamp, action type, and settlement version
+- Provides complete traceability across settlement lifecycle
 **Responsibilities:**
 - Enforce two-person approval process for VERIFIED settlements only
 - Prevent same user from performing both REQUEST RELEASE and AUTHORISE
@@ -554,12 +545,14 @@ Instead of tracking deltas between versions, we recalculate the entire settlemen
 - Only VERIFIED PAY settlements that are BLOCKED can be manually approved
 - PENDING and INVALID settlements cannot be approved until they become VERIFIED
 - RECEIVE and CANCELLED settlements do not require approval workflow
-- Approval actions are reset when settlement business status changes from VERIFIED
+- Approval actions are tied to specific settlement versions - new versions require new approvals
+- When a settlement receives a new version, any previous approval actions do not apply to the new version
 
 **Audit Trail Fields:**
 - User identity and timestamp
 - Action type (REQUEST RELEASE, AUTHORISE)
-- Settlement ID and version
+- Settlement ID and the specific version being approved
+- Mandatory user comment explaining the action
 - Group context and subtotal at time of action
 
 ## Data Models
@@ -634,11 +627,13 @@ enum SettlementStatus {
 
 interface SettlementApproval {
   settlementId: string;
-  settlementVersion: number;
+  settlementVersion: number;  // Approval is tied to specific version
   requestedBy?: string;
   requestedAt?: Date;
+  requestComment?: string;     // Mandatory comment for REQUEST RELEASE
   authorizedBy?: string;
   authorizedAt?: Date;
+  authorizeComment?: string;   // Mandatory comment for AUTHORISE
 }
 ```
 
@@ -651,6 +646,7 @@ interface AuditRecord {
   userId: string;
   action: AuditAction;
   timestamp: Date;
+  comment?: string;  // User comment for approval actions (mandatory for REQUEST_RELEASE and AUTHORISE)
   groupContext: {
     pts: string;
     processingEntity: string;
@@ -661,6 +657,7 @@ interface AuditRecord {
 }
 
 enum AuditAction {
+  CREATE = 'CREATE',
   REQUEST_RELEASE = 'REQUEST_RELEASE',
   AUTHORISE = 'AUTHORISE',
   STATUS_RESET = 'STATUS_RESET'
