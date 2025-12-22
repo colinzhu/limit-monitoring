@@ -110,10 +110,8 @@ class BackgroundCalculationService {
     const newGroupSubtotal = calculateCompleteGroupSubtotal(newGroupId);
     updateGroupSubtotal(newGroupId, newGroupSubtotal);
     
-    // 3. Reset approval status as per requirements (new version invalidates previous approvals)
-    resetApprovalStatus(settlementData.settlementId, settlementData.settlementVersion);
-    
-    // 4. Create audit record for the migration
+    // 3. Create audit record for the migration
+    // Note: Previous approvals automatically don't apply due to version-scoped approval logic
     createMigrationAuditRecord(event);
   }
   
@@ -173,6 +171,7 @@ Event-Driven Processing (CORRECT):
    - Recalculate Group A subtotal = 250M USD (Settlement X removed)
    - Recalculate Group B subtotal = 50M USD (Settlement X added)
    - Reset approval status for Settlement X (new version invalidates previous approvals)
+   - Note: No active reset needed - version-scoped approval logic handles this automatically
 3. Result: Atomic migration with both groups correctly updated
 ```
 
@@ -467,7 +466,8 @@ function handleGroupMigration(event: SettlementGroupMigrationEvent) {
   updateGroupSubtotal(newGroupId, newGroupSubtotal);
   
   // 4. Reset approval status (new version invalidates previous approvals)
-  resetApprovalStatus(settlementData.settlementId, settlementData.settlementVersion);
+  // Note: No active reset needed - approval queries are version-scoped
+  // Previous approvals automatically don't apply to new version
   
   // 5. Create comprehensive audit record
   createMigrationAuditRecord({
@@ -719,6 +719,29 @@ GET /api/settlements/{settlementId}/status
 - Approval actions are tied to specific settlement versions - new versions require new approvals
 - When a settlement receives a new version, any previous approval actions do not apply to the new version
 
+**Version-Scoped Approval Logic:**
+Instead of actively deleting or resetting approval records when new versions arrive, the system uses version-scoped queries:
+
+```typescript
+function getSettlementApprovalStatus(settlementId: string, currentVersion: number): ApprovalStatus {
+  // Only look for approvals that match the current version
+  const approval = SELECT * FROM settlement_approvals 
+                   WHERE settlement_id = settlementId 
+                   AND settlement_version = currentVersion;
+  
+  if (!approval) return null; // No approvals for this version
+  if (approval.authorizedAt) return 'AUTHORISED';
+  if (approval.requestedAt) return 'PENDING_AUTHORISE';
+  return null;
+}
+```
+
+This approach means:
+- **No active resets needed**: Previous approvals remain in database for audit purposes
+- **Automatic version isolation**: New versions automatically start with no approvals
+- **Complete audit trail**: All approval actions across all versions are preserved
+- **Simpler logic**: No complex reset operations or cascading deletes
+
 **Audit Trail Fields:**
 - User identity and timestamp
 - Action type (REQUEST RELEASE, AUTHORISE)
@@ -854,7 +877,6 @@ enum AuditAction {
   CREATE = 'CREATE',
   REQUEST_RELEASE = 'REQUEST_RELEASE',
   AUTHORISE = 'AUTHORISE',
-  STATUS_RESET = 'STATUS_RESET',
   GROUP_MIGRATION = 'GROUP_MIGRATION'
 }
 ```
