@@ -96,9 +96,9 @@ class BackgroundCalculationService {
   
   calculateCompleteGroupSubtotal(groupId: string): number {
     // Always recalculate from scratch using current rules
-    return SELECT SUM(amount * exchange_rate) 
+    return SELECT COALESCE(SUM(s.amount * r.rate), 0) as subtotal
            FROM settlements s
-           JOIN exchange_rates r ON s.currency = r.currency
+           JOIN exchange_rates r ON s.currency = r.from_currency
            WHERE s.group_id = groupId
              AND s.direction = 'PAY'
              AND s.business_status IN ('PENDING', 'INVALID', 'VERIFIED')
@@ -118,36 +118,6 @@ class BackgroundCalculationService {
 3. **Event ordering**: Events processed in `processingOrder`, not arrival time
 4. **Version handling**: Always uses latest version regardless of processing order
 
-**Race Condition Examples - Solved**:
-
-**Scenario: Multiple Settlements for Same Group**
-```
-Initial State: Group has subtotal = 400M USD
-
-Concurrent Events:
-- Event 1: Settlement A (100M USD) - processingOrder = 1001
-- Event 2: Settlement B (150M USD) - processingOrder = 1002
-
-Event-Driven Processing (CORRECT):
-1. Process Event 1001: Recalculate group subtotal = 500M USD
-2. Process Event 1002: Recalculate group subtotal = 650M USD
-3. Result: Correct subtotal = 650M USD (both settlements included)
-```
-
-**Scenario: Out-of-Order Settlement Versions**
-```
-Initial State: Settlement X version 1 (80M USD) in group
-
-Out-of-Order Events:
-- Event A: Settlement X version 3 (90M USD) - processingOrder = 2001
-- Event B: Settlement X version 2 (120M USD) - processingOrder = 2002
-
-Event-Driven Processing (CORRECT):
-1. Process Event 2001: Store version 3, recalculate group (uses version 3: 90M)
-2. Process Event 2002: Store version 2, recalculate group (still uses version 3: 90M)
-3. Result: Correct subtotal uses latest version (3) regardless of arrival order
-```
-
 **Benefits of Event-Driven Approach:**
 - **No Race Conditions**: Single-threaded processing eliminates concurrency issues
 - **Handles Complexity**: Versions, directions, business status changes all handled correctly
@@ -155,233 +125,14 @@ Event-Driven Processing (CORRECT):
 - **Consistent Results**: Always produces correct subtotal regardless of event timing
 - **Audit Trail**: Complete event history for compliance and debugging
 
-### Simple Event-Driven Architecture Solution
-
-Instead of trying to solve complex race conditions with locks and atomic operations, let's use a fundamentally different approach that eliminates the problems entirely.
-
-#### Core Insight: Separate Write Operations from Read Operations
-
-**The Problem with Traditional Approach**: Calculating subtotals on-demand by querying all settlements every time is too slow for high-volume systems.
-
-**Solution**: Pre-calculate and store the results in optimized tables that are updated in the background.
-
-#### Architecture: Event Store with Pre-Computed Summary Tables
-
-**1. Settlement Event Store (Write-Only)**
-When settlements arrive, we just store them as events - no calculations:
-```typescript
-interface SettlementEvent {
-  eventId: string;
-  settlementId: string;
-  settlementVersion: number;
-  eventType: 'SETTLEMENT_RECEIVED' | 'SETTLEMENT_UPDATED';
-  eventTimestamp: Date;
-  processingOrder: number; // Auto-incrementing sequence
-  settlementData: {
-    pts: string;
-    processingEntity: string;
-    counterpartyId: string;
-    valueDate: Date;
-    currency: string;
-    amount: number;
-    direction: 'PAY' | 'RECEIVE';
-    type: 'NET' | 'GROSS';
-    businessStatus: 'PENDING' | 'INVALID' | 'VERIFIED' | 'CANCELLED';
-  };
-}
-```
-
-**2. Pre-Computed Summary Tables (Read-Only)**
-Background processes calculate and store results in optimized tables:
-```typescript
-// This table stores pre-calculated group subtotals
-interface GroupSubtotal {
-  groupId: string;
-  pts: string;
-  processingEntity: string;
-  counterpartyId: string;
-  valueDate: Date;
-  subtotalUsd: number;           // Pre-calculated!
-  settlementCount: number;       // Pre-calculated!
-  lastCalculatedAt: Date;
-}
-
-// Settlement status is computed on-demand, not stored
-// Only approval actions are stored
-interface SettlementApproval {
-  settlementId: string;
-  requestedBy?: string;
-  requestedAt?: Date;
-  authorizedBy?: string;
-  authorizedAt?: Date;
-}
-```
-
-**3. Background Calculation Service**
-- Single-threaded processor that reads new events every 5 seconds
-- Calculates group subtotals sequentially (no race conditions possible)
-- Updates the pre-computed summary tables
-- Much simpler than complex locking mechanisms
-
-#### How This Solves All Problems
-
-**Race Conditions**: Eliminated - single-threaded processing in event order
-**Out-of-Order Processing**: Handled - events are processed by `processingOrder`, not arrival time
-**Version Updates**: Simple - just another event in the stream
-**Performance**: Excellent - writes are just appends, reads are fast lookups + simple computation
-**Mass Updates**: Eliminated - no individual settlement status fields to update
-**Limit Changes**: Instant - status computed with new limits, no database updates needed
-
-#### Processing Flow
-
-**1. Settlement Ingestion (Very Fast)**
-```
-Receive Settlement → Validate → Store as Event → Return ACK
-(No calculations, no locks, just store - extremely fast)
-```
-
-**2. Background Processing (Every 5 seconds)**
-```
-1. Read new events in processingOrder
-2. For each event:
-   - Apply current filtering rules
-   - Update group subtotal in summary table
-   - Calculate status based on current limits
-   - Update settlement status in summary table
-3. Mark events as processed
-```
-
-**3. Query Processing (Instant)**
-```
-UI/API Queries → Read from Summary Tables → Return Results
-(No calculations needed, just read pre-computed values)
-```
-
-#### Challenge: Limit Updates and Mass Recalculation
-
-**The Problem**: When exposure limits change, we need to recalculate the status for all settlements. With millions of settlements, updating the settlement_status table would be very slow.
-
-**Solution - Dynamic Status Computation with Caching**:
-
-Instead of storing settlement status in a table, we compute it on-demand but cache the results:
-
-```typescript
-// Don't store status in database - compute it dynamically
-function getSettlementStatus(settlementId: string): SettlementStatus {
-  const settlement = getSettlement(settlementId);
-  const groupSubtotal = getGroupSubtotal(settlement.groupId); // From materialized view
-  const exposureLimit = getCurrentLimit(settlement.counterpartyId); // From config
-  
-  // Check if there are approval actions
-  const approvalRecord = getApprovalRecord(settlementId);
-  
-  // Compute status based on current data
-  if (approvalRecord?.authorizedAt) return 'AUTHORISED';
-  if (approvalRecord?.requestedAt) return 'PENDING_AUTHORISE';
-  
-  // For PAY settlements with eligible business status
-  if (settlement.direction === 'PAY' && 
-      ['PENDING', 'INVALID', 'VERIFIED'].includes(settlement.businessStatus)) {
-    return groupSubtotal > exposureLimit ? 'BLOCKED' : 'CREATED';
-  }
-  
-  // RECEIVE settlements and CANCELLED settlements are always CREATED
-  return 'CREATED';
-}
-```
-
-**Key Design Principle: Store What's Expensive, Compute What's Cheap**
-
-**What We Store (Materialized Views):**
-- ✅ Group subtotals (expensive to calculate, changes only when settlements change)
-- ✅ Settlement basic data (direction, business status, etc.)
-- ✅ Approval actions (REQUEST RELEASE, AUTHORISE)
-
-**What We Compute On-Demand:**
-- ✅ Settlement status (cheap to compute: just compare group subtotal vs limit)
-- ✅ Whether group exceeds limit
-
-**Caching Strategy:**
-```typescript
-// Cache status for 30 seconds to avoid repeated calculations
-const statusCache = new Map<string, {status: string, cachedAt: Date}>();
-
-function getCachedSettlementStatus(settlementId: string): SettlementStatus {
-  const cached = statusCache.get(settlementId);
-  if (cached && (Date.now() - cached.cachedAt.getTime()) < 30000) {
-    return cached.status;
-  }
-  
-  const status = getSettlementStatus(settlementId);
-  statusCache.set(settlementId, {status, cachedAt: new Date()});
-  return status;
-}
-```
-
-**Benefits of This Approach:**
-- **Limit Updates**: When limits change, no database updates needed - status is computed with new limits immediately
-- **Performance**: Group subtotals are still pre-calculated (the expensive part)
-  - Group subtotal lookup: ~1ms (from materialized view)
-  - Status computation: ~1ms (simple comparison)
-  - Total: ~2ms per query (still very fast)
-- **Consistency**: Status always reflects current limits and group subtotals
-- **Scalability**: No mass database updates when configuration changes
-
-**When Limits Change:**
-1. Update the limit configuration
-2. Clear the status cache
-3. Next status queries automatically use new limits
-4. No database recalculation needed!
-
-**Example Scenario:**
-```
-Initial State:
-- Group ABC has subtotal = 480M USD
-- Exposure limit = 500M USD
-- 10,000 settlements in this group
-- All settlements have status CREATED
-
-Limit Changes to 450M USD:
-
-Traditional Approach (SLOW):
-- Update 10,000 settlement records: status = BLOCKED
-- Database writes: 10,000 UPDATE statements
-- Time: 30-60 seconds
-
-Our Approach (INSTANT):
-- Update limit configuration: 450M USD
-- Clear status cache
-- Next query computes: 480M > 450M = BLOCKED
-- Database writes: 0
-- Time: < 1 second
-```
-
-#### Benefits of This Approach
-
-**Simplicity**: No complex locking, atomic operations, or race condition handling
-**Performance**: Writes are O(1) appends, reads are O(1) lookups
-**Consistency**: Single-threaded processing guarantees consistent state
-**Auditability**: Complete event history for compliance
-**Scalability**: Can replay events to rebuild state, easy to debug
-**Flexibility**: Can change calculation logic and replay events
-
-This approach is much simpler, more reliable, and easier to understand than complex concurrency control mechanisms.
-
-**Alternative - Event Sourcing for Extreme High Contention**:
-For groups with extremely high settlement volumes (>1000 settlements/second), implement event sourcing:
-- Store settlement events in an append-only log
-- Use background processors to calculate subtotals from event streams
-- Provide eventual consistency with conflict resolution
-- Maintain real-time approximations with periodic exact calculations
-
 #### Performance Benefits
 This approach provides several key benefits:
 - **Minimal Database Writes**: Only factual settlement data and group subtotals are persisted
 - **Scalable Updates**: Group-level updates scale with number of groups, not individual settlements
 - **Consistent Calculations**: All computations use current rules, limits, and exchange rates
 - **Cache Efficiency**: Computed values are cached to reduce repeated calculations
-- **Data Integrity**: Immutable settlement records and optimistic locking prevent data corruption during high-volume processing
-- **Concurrency Safety**: Optimistic locking ensures subtotal calculations are atomic and consistent
+- **Data Integrity**: Immutable settlement records prevent data corruption during high-volume processing
+- **Concurrency Safety**: Single-threaded processing ensures subtotal calculations are atomic and consistent
 
 ## Components and Interfaces
 
@@ -433,7 +184,8 @@ GET /api/settlements/{settlementId}/status
 - Only PAY settlements with business status PENDING, INVALID, or VERIFIED are eligible for subtotal calculations
 - RECEIVE settlements and CANCELLED settlements are stored but excluded from risk calculations
 - NET settlements can change direction between PAY and RECEIVE based on underlying settlement updates
-- Settlement versions are processed based on version number, not arrival order
+- Settlement versions are processed based on version number, not arrival time
+- Out-of-order version processing is handled correctly using the event-driven architecture arrival order
 
 ### Aggregation Engine
 **Responsibilities:**
@@ -468,27 +220,6 @@ GET /api/settlements/{settlementId}/status
 - Compute individual settlement status dynamically from group state
 - Batch process settlement updates to minimize database transactions
 
-**Concurrency Control:**
-- Use atomic increment/decrement operations for subtotal updates to avoid read-calculate-update race conditions
-- Implement distributed locking (Redis) for complex operations that require full recalculation
-- Use database transactions for multi-group operations (settlement migration)
-- Maintain operation idempotency to handle duplicate processing
-- Monitor lock contention and implement backoff strategies for high-volume groups
-
-**Atomic Operations by Scenario:**
-- **New Settlement**: `subtotal += settlement_usd_amount`
-- **Version Update (Idempotent)**: 
-  1. Lock settlement by `settlement_id` (not version)
-  2. Calculate current contribution of settlement (latest version)
-  3. Insert new version with `ON CONFLICT DO NOTHING` (idempotent)
-  4. Calculate new contribution of settlement (after insert)
-  5. `subtotal = subtotal - old_contribution + new_contribution` (atomic)
-- **Group Migration**: Transaction with `old_group.subtotal -= amount; new_group.subtotal += amount`
-- **Rule Changes**: Distributed lock + full recalculation from `SELECT SUM(amount * rate) WHERE eligible`
-
-**Key Insight for Out-of-Order Processing**: 
-Instead of tracking deltas between versions, we recalculate the entire settlement's contribution idempotently. This handles out-of-order arrival, duplicate processing, and ensures the group subtotal always reflects the latest version regardless of processing order.
-
 ### Limit Monitoring Service
 **Responsibilities:**
 - Compare group subtotals against exposure limits
@@ -514,30 +245,7 @@ Instead of tracking deltas between versions, we recalculate the entire settlemen
 - Group-level limit evaluation prevents individual settlement updates
 - Caching layer reduces computation overhead for frequently queried settlements
 
-### User Interface Components
-
-**Main Dashboard Layout:**
-- **Upper Section**: Settlement groups with aggregated information (PTS, Processing_Entity, Counterparty_ID, Value_Date, group subtotal, status summary)
-- **Lower Section**: Individual settlements for selected group (latest version only)
-- **Side Panel**: Detailed settlement information with tabbed interface
-
-**Settlement Group Display:**
-- Shows group-level information and subtotal status
-- Clicking a group filters the lower section to show related settlements
-- Only displays latest version of each settlement in the group
-
-**Settlement Detail Side Panel:**
-- **Overview Tab**: Settlement details, current status, group context
-- **Audit Trail Tab**: Complete action history across all versions of the settlement
-- **Version History Tab**: All versions of the settlement with their details
-
-**Audit Trail Tab Requirements:**
-- Shows chronological history of all actions for the Settlement_ID
-- Includes CREATE actions for each version received
-- Includes all approval actions (REQUEST RELEASE, AUTHORISE) with version context
-- Displays user identity, timestamp, action type, and settlement version
-- Provides complete traceability across settlement lifecycle
-**Responsibilities:**
+### Approval Workflow Service
 - Enforce two-person approval process for VERIFIED settlements only
 - Prevent same user from performing both REQUEST RELEASE and AUTHORISE
 - Maintain comprehensive audit trails
@@ -701,10 +409,6 @@ interface FilteringRule {
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system-essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
-## Correctness Properties
-
-*A property is a characteristic or behavior that should hold true across all valid executions of a system-essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
-
 Based on the requirements analysis, the following correctness properties must be maintained by the Payment Limit Monitoring System:
 
 ### Data Management Properties
@@ -837,16 +541,6 @@ Based on the requirements analysis, the following correctness properties must be
 
 **Property 29: Historical Data Accessibility**
 *For any* settlement, all versions and their timestamps should remain accessible for audit and compliance queries, including direction, type, and business status information
-**Validates: Requirements 9.1**
-
-**Property 30: Audit Trail Immutability**
-*For any* historical audit record, it should remain unmodifiable and accessible throughout the compliance retention period
-**Validates: Requirements 9.5**idates: Requirements 8.2**
-
-### Audit and Compliance Properties
-
-**Property 29: Historical Data Accessibility**
-*For any* settlement, all versions and their timestamps should remain accessible for audit and compliance queries
 **Validates: Requirements 9.1**
 
 **Property 30: Audit Trail Immutability**
