@@ -451,6 +451,7 @@ GET /api/settlements/{settlementId}/status
 - Efficient handling of high-volume updates without mass settlement record updates
 - On-demand status computation to avoid performance bottlenecks
 - Complete group recalculation rather than incremental updates to ensure accuracy
+- Atomic group migration when settlement group keys change (PTS, Processing_Entity, Counterparty_ID, Value_Date)
 
 **Business Logic:**
 - Only PAY settlements contribute to subtotal calculations
@@ -458,6 +459,8 @@ GET /api/settlements/{settlementId}/status
 - RECEIVE settlements are excluded regardless of business status
 - NET settlements require special handling for direction changes
 - Complete recalculation ensures accuracy when settlement amounts change or eligibility changes
+- Group migration handling ensures settlements are properly moved between groups when key attributes change
+- Counterparty changes require recalculation of both old and new groups with appropriate exposure limits
 
 **Performance Optimizations:**
 - Maintain materialized subtotals at group level only

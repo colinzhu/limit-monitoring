@@ -76,9 +76,13 @@ The Payment Limit Monitoring System is a financial risk management application t
 5. WHEN a settlement version changes its inclusion criteria (direction, business status, or filtering rule match), THE Payment_Limit_Monitoring_System SHALL recalculate the complete group subtotal to reflect the current set of included settlements
 6. WHEN a NET settlement direction changes between PAY and RECEIVE due to underlying settlement updates, THE Payment_Limit_Monitoring_System SHALL recalculate the complete group subtotal to reflect the current settlement state
 7. WHEN a settlement version updates the Counterparty_ID, PTS, Processing_Entity, or Value_Date, THE Payment_Limit_Monitoring_System SHALL move the settlement to the appropriate new group and recalculate complete subtotals for both affected groups using all current settlement versions in each group
-8. WHEN a settlement receives a new version, THE Payment_Limit_Monitoring_System SHALL reset any existing approval status and re-evaluate the settlement status based on the updated information and recalculated group subtotal
-9. WHEN filtering rules are updated from the rule system, THE Payment_Limit_Monitoring_System SHALL re-evaluate existing settlements against the new criteria and recalculate complete subtotals for all affected groups
-10. THE Payment_Limit_Monitoring_System SHALL maintain accurate subtotals across all active settlement groups by performing complete recalculation rather than incremental updates to ensure data consistency
+8. WHEN a settlement changes Counterparty_ID in a new version, THE Payment_Limit_Monitoring_System SHALL remove the settlement's contribution from the old counterparty group, add it to the new counterparty group, recalculate subtotals for both groups, and re-evaluate settlement statuses in both groups based on their respective exposure limits
+8. WHEN a settlement changes Counterparty_ID in a new version, THE Payment_Limit_Monitoring_System SHALL remove the settlement's contribution from the old counterparty group, add it to the new counterparty group, recalculate subtotals for both groups, and re-evaluate settlement statuses in both groups based on their respective exposure limits
+9. WHEN a settlement receives a new version, THE Payment_Limit_Monitoring_System SHALL reset any existing approval status and re-evaluate the settlement status based on the updated information and recalculated group subtotal
+9. WHEN a settlement receives a new version, THE Payment_Limit_Monitoring_System SHALL reset any existing approval status and re-evaluate the settlement status based on the updated information and recalculated group subtotal
+10. WHEN filtering rules are updated from the rule system, THE Payment_Limit_Monitoring_System SHALL re-evaluate existing settlements against the new criteria and recalculate complete subtotals for all affected groups
+10. WHEN filtering rules are updated from the rule system, THE Payment_Limit_Monitoring_System SHALL re-evaluate existing settlements against the new criteria and recalculate complete subtotals for all affected groups
+11. THE Payment_Limit_Monitoring_System SHALL maintain accurate subtotals across all active settlement groups by performing complete recalculation rather than incremental updates to ensure data consistency
 
 ### Requirement 3
 
@@ -234,6 +238,37 @@ The Payment Limit Monitoring System is a financial risk management application t
 3. WHEN displaying the audit trail for a settlement, THE Payment_Limit_Monitoring_System SHALL show all actions across all versions of the same Settlement_ID in chronological order
 4. WHEN displaying audit trail entries, THE Payment_Limit_Monitoring_System SHALL clearly indicate the settlement version, action type (CREATE, REQUEST RELEASE, AUTHORISE), user identity (or system for CREATE actions), timestamp, user comment (for approval actions), and relevant context
 5. THE Payment_Limit_Monitoring_System SHALL maintain audit trail completeness ensuring no settlement version or approval action is missing from the historical record
+
+### Requirement 13
+
+**User Story:** As a risk manager, I want the system to handle settlement group migrations correctly when counterparty information changes, so that exposure calculations remain accurate across different counterparty groups.
+
+#### Acceptance Criteria
+
+1. WHEN a settlement receives a new version with a different Counterparty_ID, THE Payment_Limit_Monitoring_System SHALL treat it as a group migration and update both the old and new counterparty groups
+2. WHEN processing a counterparty change, THE Payment_Limit_Monitoring_System SHALL ensure the settlement is removed from the old group's subtotal calculation and added to the new group's subtotal calculation
+3. WHEN a settlement migrates between counterparty groups, THE Payment_Limit_Monitoring_System SHALL recalculate subtotals for both affected groups and re-evaluate all settlement statuses in both groups
+4. WHEN a settlement moves to a new counterparty group with different exposure limits, THE Payment_Limit_Monitoring_System SHALL apply the appropriate exposure limit for the new counterparty
+5. THE Payment_Limit_Monitoring_System SHALL handle counterparty migrations atomically to prevent inconsistent states during the transition
+
+#### Example Scenario
+
+**Initial State:**
+- Settlement ABC123 Version 1: Amount 100M USD, Counterparty_A
+- Group A (Counterparty_A): Subtotal = 450M USD (including ABC123), Limit = 500M USD
+- Group B (Counterparty_B): Subtotal = 300M USD, Limit = 400M USD
+- All settlements in both groups have status CREATED (within limits)
+
+**Counterparty Change Event:**
+- Settlement ABC123 Version 2: Amount 100M USD, Counterparty_B (changed from Counterparty_A)
+
+**System Response (Required):**
+- Remove ABC123 from Group A: New subtotal = 450M - 100M = 350M USD
+- Add ABC123 to Group B: New subtotal = 300M + 100M = 400M USD
+- Group A settlements remain CREATED (350M < 500M limit)
+- Group B settlements become BLOCKED (400M = 400M limit, at threshold)
+- ABC123 now belongs to Group B and follows Group B's exposure limit
+- Both group subtotals are recalculated completely to ensure accuracy
 
 ### Requirement 9
 
