@@ -370,33 +370,34 @@ This approach ensures that the system maintains optimal performance for real-tim
 
 #### Challenge 6: Efficient Counterparty ID Change Detection and Dual Group Recalculation
 
-**Problem**: When a settlement receives a new version with a different Counterparty_ID, it must be moved from its current group to a new group, requiring recalculation of subtotals for both affected groups. The challenge is detecting these changes efficiently and ensuring both groups are updated atomically without performance degradation. Traditional approaches face several issues:
+**Problem**: When a settlement receives a new version with a different Counterparty_ID, it must be moved from its current group to a new group, requiring recalculation of subtotals for both affected groups. The challenge is detecting these changes efficiently and ensuring both groups are updated atomically without performance degradation.
 
-- **Change Detection Overhead**: Comparing every field of every settlement version to detect counterparty changes is expensive
-- **Dual Group Impact**: Both the old and new counterparty groups need immediate subtotal recalculation
-- **Atomicity Requirements**: The migration must be atomic to prevent inconsistent states where the settlement belongs to neither or both groups
-- **Audit Trail Complexity**: Must track what changed, which groups were affected, and the impact on both group subtotals
-
-**Solution - Event-Driven Counterparty Migration with Optimized Change Detection**:
-
-The system implements an efficient change detection and atomic migration process that minimizes database operations while ensuring data consistency:
+**Solution - SQL-Based Change Detection with Event-Driven Processing**:
 
 **1. Optimized Counterparty Change Detection During Ingestion**:
 ```typescript
 class SettlementIngestionService {
   async processSettlementVersion(newSettlement: SettlementData): Promise<void> {
-    // 1. Single SQL query to detect counterparty changes and get existing data
+    // Single SQL query to detect counterparty changes and get existing data
     const changeDetectionResult = await this.detectCounterpartyChangeSQL(newSettlement);
     
+    // Check if we should process this version (handles out-of-order arrivals)
+    if (!changeDetectionResult.shouldProcess) {
+      // This is an older version arriving late - store it but don't process
+      await this.storeHistoricalVersion(newSettlement);
+      return;  // Exit early, no event generation
+    }
+    
+    // Continue with normal processing for newer versions
     if (changeDetectionResult.isCounterpartyChange) {
-      // 2. Generate specialized counterparty migration event
+      // Generate counterparty migration event
       const migrationEvent = this.createCounterpartyMigrationEvent(
         changeDetectionResult.existingSettlement, 
         newSettlement
       );
       await this.appendToEventStore(migrationEvent);
     } else if (changeDetectionResult.existingSettlement) {
-      // Regular update event for non-counterparty changes
+      // Regular update event
       const updateEvent = this.createSettlementUpdateEvent(newSettlement);
       await this.appendToEventStore(updateEvent);
     } else {
@@ -409,16 +410,23 @@ class SettlementIngestionService {
   private async detectCounterpartyChangeSQL(newSettlement: SettlementData): Promise<{
     existingSettlement: SettlementData | null;
     isCounterpartyChange: boolean;
+    shouldProcess: boolean;
   }> {
-    // Single SQL query that both retrieves existing settlement AND detects counterparty change
+    // Optimized single query with version comparison to handle out-of-order arrivals
     const query = `
       SELECT 
         s.*,
         CASE 
-          WHEN s.settlement_id IS NULL THEN false  -- New settlement
-          WHEN s.counterparty_id != $2 THEN true   -- Counterparty changed
-          ELSE false                               -- No counterparty change
-        END as is_counterparty_change
+          WHEN s.settlement_id IS NULL THEN false                    -- No existing settlement
+          WHEN $3 <= s.settlement_version THEN false                 -- Incoming version is older/equal, ignore
+          WHEN s.counterparty_id != $2 THEN true                     -- Counterparty changed
+          ELSE false                                                 -- Counterparty same
+        END as is_counterparty_change,
+        CASE
+          WHEN s.settlement_id IS NULL THEN true                     -- New settlement, always process
+          WHEN $3 > s.settlement_version THEN true                   -- Incoming version is newer, process
+          ELSE false                                                 -- Incoming version is older, ignore
+        END as should_process
       FROM settlements s
       WHERE s.settlement_id = $1
         AND s.settlement_version = (
@@ -428,126 +436,121 @@ class SettlementIngestionService {
         )
     `;
     
-    const result = await db.query(query, [newSettlement.settlementId, newSettlement.counterpartyId]);
+    const result = await db.query(query, [
+      newSettlement.settlementId,      // $1
+      newSettlement.counterpartyId,    // $2
+      newSettlement.settlementVersion  // $3 - version comparison
+    ]);
     
     if (result.rows.length === 0) {
-      // New settlement
-      return {
-        existingSettlement: null,
-        isCounterpartyChange: false
+      return { 
+        existingSettlement: null, 
+        isCounterpartyChange: false,
+        shouldProcess: true  // New settlement, always process
       };
     }
     
     const row = result.rows[0];
     return {
       existingSettlement: this.mapRowToSettlementData(row),
-      isCounterpartyChange: row.is_counterparty_change
-    };
-  }
-  
-  private createCounterpartyMigrationEvent(
-    oldSettlement: SettlementData, 
-    newSettlement: SettlementData
-  ): SettlementCounterpartyMigrationEvent {
-    const oldGroupId = this.calculateGroupId(oldSettlement);
-    const newGroupId = this.calculateGroupId(newSettlement);
-    
-    return {
-      eventId: generateEventId(),
-      settlementId: newSettlement.settlementId,
-      settlementVersion: newSettlement.settlementVersion,
-      eventType: 'SETTLEMENT_COUNTERPARTY_MIGRATION',
-      eventTimestamp: new Date(),
-      processingOrder: getNextProcessingOrder(),
-      settlementData: newSettlement,
-      migrationData: {
-        oldGroupId,
-        newGroupId,
-        oldCounterpartyId: oldSettlement.counterpartyId,
-        newCounterpartyId: newSettlement.counterpartyId,
-        // Group keys remain the same except counterparty
-        groupKeys: {
-          pts: newSettlement.pts,
-          processingEntity: newSettlement.processingEntity,
-          valueDate: newSettlement.valueDate
-        }
-      },
-      processed: false
+      isCounterpartyChange: row.is_counterparty_change,
+      shouldProcess: row.should_process
     };
   }
 }
 ```
 
-**Alternative: Even More Efficient Batch Detection**
-For high-volume scenarios, you can batch the detection across multiple settlements:
-
+**2. Batch Processing for High-Volume Scenarios**:
 ```typescript
 class SettlementIngestionService {
   async processBatchOfSettlements(settlements: SettlementData[]): Promise<void> {
+    if (settlements.length === 0) return;
+    
     // Single SQL query to detect counterparty changes for entire batch
     const batchChangeDetection = await this.detectCounterpartyChangesBatchSQL(settlements);
     
     const events: SettlementEvent[] = [];
+    const historicalVersions: SettlementData[] = [];
     
     for (const settlement of settlements) {
       const detection = batchChangeDetection.get(settlement.settlementId);
       
-      if (detection?.isCounterpartyChange) {
+      // Skip older versions that arrived out of order
+      if (!detection?.shouldProcess) {
+        historicalVersions.push(settlement);
+        continue;
+      }
+      
+      if (detection.isCounterpartyChange) {
         events.push(this.createCounterpartyMigrationEvent(detection.existingSettlement, settlement));
-      } else if (detection?.existingSettlement) {
+      } else if (detection.existingSettlement) {
         events.push(this.createSettlementUpdateEvent(settlement));
       } else {
         events.push(this.createSettlementCreateEvent(settlement));
       }
     }
     
-    // Batch append all events
-    await this.appendEventsToStoreBatch(events);
+    // Store historical versions without generating events
+    if (historicalVersions.length > 0) {
+      await this.storeHistoricalVersionsBatch(historicalVersions);
+    }
+    
+    // Append events for newer versions
+    if (events.length > 0) {
+      await this.appendEventsToStoreBatch(events);
+    }
   }
   
   private async detectCounterpartyChangesBatchSQL(settlements: SettlementData[]): Promise<Map<string, {
     existingSettlement: SettlementData | null;
     isCounterpartyChange: boolean;
+    shouldProcess: boolean;
   }>> {
-    const settlementIds = settlements.map(s => s.settlementId);
-    const settlementMap = new Map(settlements.map(s => [s.settlementId, s]));
+    // Use VALUES clause for better performance with version comparison
+    const valuesClauses = settlements.map((s, index) => 
+      `($${index * 3 + 1}, $${index * 3 + 2}, $${index * 3 + 3})`
+    ).join(', ');
     
-    // Single SQL query for entire batch - extremely efficient
+    const params = settlements.flatMap(s => [s.settlementId, s.counterpartyId, s.settlementVersion]);
+    
     const query = `
+      WITH new_settlements(settlement_id, new_counterparty_id, new_version) AS (
+        VALUES ${valuesClauses}
+      )
       SELECT 
         s.*,
-        new_settlements.counterparty_id as new_counterparty_id,
+        ns.settlement_id as input_settlement_id,
+        ns.new_counterparty_id,
+        ns.new_version,
         CASE 
-          WHEN s.settlement_id IS NULL THEN false  -- New settlement
-          WHEN s.counterparty_id != new_settlements.counterparty_id THEN true   -- Counterparty changed
-          ELSE false                               -- No counterparty change
-        END as is_counterparty_change
-      FROM (
-        SELECT unnest($1::text[]) as settlement_id, unnest($2::text[]) as counterparty_id
-      ) new_settlements
-      LEFT JOIN settlements s ON s.settlement_id = new_settlements.settlement_id
+          WHEN s.settlement_id IS NULL THEN false                    -- No existing settlement
+          WHEN ns.new_version <= s.settlement_version THEN false     -- Incoming version is older/equal
+          WHEN s.counterparty_id != ns.new_counterparty_id THEN true -- Counterparty changed
+          ELSE false                                                 -- Counterparty same
+        END as is_counterparty_change,
+        CASE
+          WHEN s.settlement_id IS NULL THEN true                     -- New settlement, always process
+          WHEN ns.new_version > s.settlement_version THEN true       -- Incoming version is newer
+          ELSE false                                                 -- Incoming version is older
+        END as should_process
+      FROM new_settlements ns
+      LEFT JOIN settlements s ON s.settlement_id = ns.settlement_id
         AND s.settlement_version = (
           SELECT MAX(settlement_version) 
           FROM settlements s2 
-          WHERE s2.settlement_id = new_settlements.settlement_id
+          WHERE s2.settlement_id = ns.settlement_id
         )
     `;
     
-    const result = await db.query(query, [
-      settlementIds,
-      settlements.map(s => s.counterpartyId)
-    ]);
+    const result = await db.query(query, params);
     
-    const detectionMap = new Map<string, {
-      existingSettlement: SettlementData | null;
-      isCounterpartyChange: boolean;
-    }>();
-    
+    const detectionMap = new Map();
     for (const row of result.rows) {
-      const settlementId = row.settlement_id || settlementMap.get(row.settlement_id)?.settlementId;
+      const settlementId = row.input_settlement_id;
       detectionMap.set(settlementId, {
         existingSettlement: row.settlement_id ? this.mapRowToSettlementData(row) : null,
-        isCounterpartyChange: row.is_counterparty_change
+        isCounterpartyChange: row.is_counterparty_change,
+        shouldProcess: row.should_process
       });
     }
     
@@ -556,59 +559,61 @@ class SettlementIngestionService {
 }
 ```
 
-**2. Atomic Dual Group Recalculation**:
+**3. Atomic Dual Group Recalculation**:
 ```typescript
 class BackgroundCalculationService {
   async processCounterpartyMigrationEventsBatch(migrationEvents: SettlementCounterpartyMigrationEvent[]): Promise<void> {
-    // 1. Collect all affected groups (both old and new)
-    const affectedGroups = new Set<string>();
+    if (migrationEvents.length === 0) return;
     
+    // Collect all affected groups
+    const affectedGroups = new Set<string>();
     for (const event of migrationEvents) {
       affectedGroups.add(event.migrationData.oldGroupId);
       affectedGroups.add(event.migrationData.newGroupId);
     }
     
-    // 2. Update settlement counterparty assignments in batch
-    await this.updateSettlementCounterpartyAssignmentsBatch(migrationEvents);
-    
-    // 3. Recalculate subtotals for all affected groups in single operation
-    await this.recalculateGroupSubtotalsBatch(Array.from(affectedGroups));
-    
-    // 4. Create comprehensive audit records
-    await this.createCounterpartyMigrationAuditRecordsBatch(migrationEvents, affectedGroups);
-    
-    // Note: No active approval reset needed - version-scoped approval logic 
-    // automatically handles this since new version invalidates previous approvals
+    await db.transaction(async (tx) => {
+      // 1. Update settlement assignments
+      await this.updateSettlementCounterpartyAssignmentsBatch(tx, migrationEvents);
+      
+      // 2. Recalculate affected group subtotals
+      await this.recalculateGroupSubtotalsBatch(tx, Array.from(affectedGroups));
+      
+      // 3. Create audit records
+      await this.createCounterpartyMigrationAuditRecordsBatch(tx, migrationEvents, affectedGroups);
+    });
   }
   
-  private async updateSettlementCounterpartyAssignmentsBatch(events: SettlementCounterpartyMigrationEvent[]): Promise<void> {
-    // Single SQL statement to update all settlement counterparty assignments
-    const cases = events.map(event => 
-      `WHEN settlement_id = '${event.settlementId}' THEN '${event.migrationData.newCounterpartyId}'`
-    ).join(' ');
+  private async updateSettlementCounterpartyAssignmentsBatch(
+    tx: DatabaseTransaction, 
+    events: SettlementCounterpartyMigrationEvent[]
+  ): Promise<void> {
+    // Use parameterized query to avoid SQL injection
+    const valuesClauses = events.map((_, index) => 
+      `($${index * 4 + 1}, $${index * 4 + 2}, $${index * 4 + 3}, $${index * 4 + 4})`
+    ).join(', ');
     
-    const groupCases = events.map(event => 
-      `WHEN settlement_id = '${event.settlementId}' THEN '${event.migrationData.newGroupId}'`
-    ).join(' ');
-    
-    const settlementIds = events.map(e => `'${e.settlementId}'`).join(',');
+    const params = events.flatMap(e => [
+      e.settlementId,
+      e.migrationData.newCounterpartyId,
+      e.migrationData.newGroupId,
+      e.settlementVersion
+    ]);
     
     const query = `
       UPDATE settlements 
       SET 
-        counterparty_id = CASE ${cases} END,
-        group_id = CASE ${groupCases} END,
-        settlement_version = CASE ${events.map(e => 
-          `WHEN settlement_id = '${e.settlementId}' THEN ${e.settlementVersion}`
-        ).join(' ')} END
-      WHERE settlement_id IN (${settlementIds})
+        counterparty_id = updates.new_counterparty_id,
+        group_id = updates.new_group_id,
+        settlement_version = updates.new_version
+      FROM (VALUES ${valuesClauses}) AS updates(settlement_id, new_counterparty_id, new_group_id, new_version)
+      WHERE settlements.settlement_id = updates.settlement_id
     `;
     
-    await db.query(query);
+    await tx.query(query, params);
   }
   
-  private async recalculateGroupSubtotalsBatch(groupIds: string[]): Promise<void> {
-    // Highly optimized single query that recalculates all affected groups
+  private async recalculateGroupSubtotalsBatch(tx: DatabaseTransaction, groupIds: string[]): Promise<void> {
     const query = `
       INSERT INTO group_subtotals (
         group_id, pts, processing_entity, counterparty_id, value_date,
@@ -624,20 +629,20 @@ class BackgroundCalculationService {
           CASE 
             WHEN s.direction = 'PAY' 
             AND s.business_status IN ('PENDING', 'INVALID', 'VERIFIED')
-            AND applyFilteringRules(s) = true
-            THEN s.amount * r.rate 
+            AND s.is_eligible_for_calculation = true
+            THEN s.amount * COALESCE(r.rate, 1.0)
             ELSE 0 
           END
         ), 0) as subtotal_usd,
         COUNT(CASE 
           WHEN s.direction = 'PAY' 
           AND s.business_status IN ('PENDING', 'INVALID', 'VERIFIED')
-          AND applyFilteringRules(s) = true
+          AND s.is_eligible_for_calculation = true
           THEN 1 
         END) as settlement_count,
         NOW() as calculated_at
       FROM settlements s
-      JOIN exchange_rates r ON s.currency = r.from_currency AND r.to_currency = 'USD'
+      LEFT JOIN exchange_rates r ON s.currency = r.from_currency AND r.to_currency = 'USD'
       WHERE s.group_id = ANY($1)
         AND s.settlement_version = (
           SELECT MAX(settlement_version) 
@@ -648,120 +653,115 @@ class BackgroundCalculationService {
       ON CONFLICT (group_id) DO UPDATE SET
         subtotal_usd = EXCLUDED.subtotal_usd,
         settlement_count = EXCLUDED.settlement_count,
-        calculated_at = EXCLUDED.calculated_at;
+        calculated_at = EXCLUDED.calculated_at
     `;
     
-    await db.query(query, [groupIds]);
-  }
-  
-  private async createCounterpartyMigrationAuditRecordsBatch(
-    events: SettlementCounterpartyMigrationEvent[], 
-    affectedGroups: Set<string>
-  ): Promise<void> {
-    // Get current subtotals for audit records
-    const groupSubtotals = await this.getGroupSubtotalsForAudit(Array.from(affectedGroups));
-    
-    const auditRecords = events.map(event => ({
-      settlement_id: event.settlementId,
-      settlement_version: event.settlementVersion,
-      action: 'COUNTERPARTY_MIGRATION',
-      timestamp: new Date(),
-      system_identity: 'BACKGROUND_PROCESSOR',
-      details: {
-        old_counterparty_id: event.migrationData.oldCounterpartyId,
-        new_counterparty_id: event.migrationData.newCounterpartyId,
-        old_group_id: event.migrationData.oldGroupId,
-        new_group_id: event.migrationData.newGroupId,
-        old_group_subtotal: groupSubtotals.get(event.migrationData.oldGroupId)?.subtotalUsd || 0,
-        new_group_subtotal: groupSubtotals.get(event.migrationData.newGroupId)?.subtotalUsd || 0
-      }
-    }));
-    
-    // Batch insert all audit records
-    await this.insertAuditRecordsBatch(auditRecords);
+    await tx.query(query, [groupIds]);
   }
 }
 ```
 
-**3. Performance Optimizations**:
+**4. Performance Benefits**:
 
-**SQL-Based Change Detection Efficiency**:
-- Single SQL query combines settlement lookup AND counterparty change detection
-- Database-level comparison eliminates application-level data transfer and processing
-- Leverages database indexes for optimal performance
-- Can be further optimized with batch processing for multiple settlements
+**Out-of-Order Handling**:
+The system correctly handles settlement versions arriving out of chronological order by comparing version numbers in the SQL query itself:
 
-**Batch Processing Benefits**:
-- Multiple counterparty migrations processed together in single database operations
-- Affected groups deduplicated (if multiple settlements move to same counterparty group)
-- Single subtotal recalculation per affected group regardless of number of migrations
-- Batch change detection for high-volume scenarios
+**Scenario 1: v3 arrives first, then v2 arrives**
+```sql
+-- Database: v3 exists (settlement_version = 3)
+-- Incoming: v2 (settlement_version = 2)
 
-**Database Operation Minimization**:
-- **Traditional Approach**: 2 operations per settlement (lookup existing + compare) + 3 operations per migration
-- **SQL-Based Approach**: 1 operation per settlement (combined lookup+compare) + 3 operations total for batch migration
-- **Batch SQL Approach**: 1 operation for entire batch detection + 3 operations total for batch migration
-- **Efficiency Gain**: 60-80% reduction in database operations for change detection, 75-90% for migration processing
+-- Query evaluation:
+WHEN $3 <= s.settlement_version THEN false  -- 2 <= 3 → true, so is_counterparty_change = false
+WHEN $3 > s.settlement_version THEN true    -- 2 > 3 → false, so should_process = false
+
+-- Result: should_process = false
+-- Action: Store v2 as historical version, but don't generate any events or recalculate groups
+```
+
+**Scenario 2: v2 exists, then v3 arrives (normal order)**
+```sql
+-- Database: v2 exists (settlement_version = 2)
+-- Incoming: v3 (settlement_version = 3)
+
+-- Query evaluation:
+WHEN $3 <= s.settlement_version THEN false  -- 3 <= 2 → false, continue
+WHEN s.counterparty_id != $2 THEN true      -- Check if counterparty changed
+WHEN $3 > s.settlement_version THEN true    -- 3 > 2 → true, so should_process = true
+
+-- Result: should_process = true, is_counterparty_change = (depends on counterparty values)
+-- Action: Process normally, generate migration event if counterparty changed
+```
+
+**Scenario 3: Duplicate version arrives (v2 arrives when v2 already exists)**
+```sql
+-- Database: v2 exists (settlement_version = 2)
+-- Incoming: v2 (settlement_version = 2)
+
+-- Query evaluation:
+WHEN $3 <= s.settlement_version THEN false  -- 2 <= 2 → true, so is_counterparty_change = false
+WHEN $3 > s.settlement_version THEN true    -- 2 > 2 → false, so should_process = false
+
+-- Result: should_process = false
+-- Action: Ignore duplicate, don't process
+```
+
+**Benefits of Version-Aware Detection**:
+- **Correctness**: Only the latest version affects group subtotals and status calculations
+- **Idempotency**: Duplicate versions are safely ignored without side effects
+- **Performance**: Out-of-order versions don't trigger unnecessary recalculations
+- **Audit Trail**: Historical versions are still stored for compliance, just not processed
+- **Database-Level Logic**: Version comparison happens in SQL, eliminating application-level checks
+
+**4. Performance Benefits**:
+
+**Change Detection Efficiency**:
+- **Single Settlement**: 1 SQL query (combines lookup + comparison)
+- **Batch Processing**: 1 SQL query for entire batch regardless of size
+- **Database-Level Comparison**: Eliminates application-level processing
+- **Index Optimization**: Leverages settlement_id and settlement_version indexes
+
+**Migration Processing Efficiency**:
+- **Atomic Transaction**: All updates in single transaction for consistency
+- **Parameterized Queries**: Prevents SQL injection and improves performance
+- **Batch Operations**: Single query updates all settlements, single query recalculates all groups
+- **Group Deduplication**: Each affected group calculated only once
 
 **Performance Comparison**:
-
-**Single Settlement Processing**:
 ```
-Traditional Approach:
-1. SELECT existing settlement (1 query)
-2. Compare counterparty_id in application (0 queries)
-3. Process migration if needed (3 queries)
+Traditional Approach (per settlement):
+- 1 query: Get existing settlement
+- 1 comparison: Check counterparty change
+- 3 queries: Update old group, new group, settlement
 Total: 4 queries per settlement
 
-SQL-Based Approach:
-1. SELECT with counterparty change detection (1 query)
-2. Process migration if needed (3 queries for entire batch)
-Total: 1 query per settlement + 3 queries per batch
+Optimized Approach (batch of 100 settlements):
+- 1 query: Batch change detection for all 100 settlements
+- 3 queries: Batch update settlements, recalculate groups, create audits
+Total: 4 queries for entire batch (99% reduction)
 ```
 
-**Batch Processing (100 settlements)**:
-```
-Traditional Approach:
-- 100 lookup queries + 100 comparisons + migration processing
-- Total: 400+ database operations
+**5. Implementation Considerations**:
 
-SQL-Based Batch Approach:
-- 1 batch detection query + 3 migration processing queries
-- Total: 4 database operations
-- Efficiency Gain: 99% reduction in database operations
+**Database Indexes Required**:
+```sql
+-- Essential for change detection performance
+CREATE INDEX idx_settlements_id_version ON settlements(settlement_id, settlement_version DESC);
+CREATE INDEX idx_settlements_group_id ON settlements(group_id);
+CREATE INDEX idx_settlements_counterparty ON settlements(counterparty_id);
 ```
 
-**4. Migration Scenarios and Performance**:
+**Error Handling**:
+- Transaction rollback on any failure ensures data consistency
+- Proper NULL handling in SQL queries prevents unexpected results
+- Parameterized queries prevent SQL injection vulnerabilities
 
-**Single Counterparty Change**:
-```
-Settlement ABC123 changes from Counterparty_X to Counterparty_Y
-- Old Group: (PTS1, PE1, Counterparty_X, 2024-01-15) - subtotal decreases
-- New Group: (PTS1, PE1, Counterparty_Y, 2024-01-15) - subtotal increases
-- Operations: 3 total (regardless of group sizes)
-- Time: < 100ms
-- Approval Status: Automatically handled by version-scoped logic
-```
+**Scalability Considerations**:
+- Batch size should be configurable (recommended: 100-1000 settlements)
+- Large batches may require chunking to avoid memory issues
+- Monitor transaction lock duration to prevent blocking other operations
 
-**Bulk Migration Scenario**:
-```
-100 settlements change counterparty during corporate restructuring
-- Affected Groups: Up to 200 groups (100 old + 100 new, with potential overlap)
-- Operations: 3 total (same as single migration due to batching)
-- Time: < 500ms
-- Traditional Approach: 300 operations, 10-30 seconds
-```
-
-**Benefits of Counterparty Migration Approach**:
-- **Atomic Consistency**: Both groups updated in single transaction, preventing inconsistent states
-- **Performance Scalability**: Batch processing scales linearly with number of affected groups, not individual migrations
-- **Audit Completeness**: Full migration context captured including impact on both counterparty groups
-- **Simplified Logic**: Focus only on counterparty changes eliminates complexity of multi-field migrations
-- **Change Detection Efficiency**: Minimal overhead during settlement ingestion (single field comparison)
-- **Database Optimization**: Leverages database batch operations for maximum efficiency
-- **Version-Scoped Approvals**: No active reset needed - approval logic automatically handles version changes
-
-This approach ensures that counterparty changes are detected efficiently and both affected groups are recalculated atomically while maintaining optimal system performance.
+This approach provides maximum efficiency while ensuring data consistency and proper error handling.
 
 ### Simple Event-Driven Architecture Solution
 
