@@ -35,6 +35,9 @@ The Payment Limit Monitoring System is a financial risk management application t
 - **Exchange_Rate**: Currency conversion rate automatically fetched from external systems and used for USD equivalent calculations
 - **Filtering_Rules**: Configurable criteria stored in an external rule system that determine which settlements should be included in subtotal calculations
 - **Rule_System**: External system that manages and provides filtering rules for settlement inclusion criteria
+- **SETTLEMENT_HISTORY**: Dedicated database table for storing archived settlement versions that are no longer the latest version, used solely for historical audit purposes and not referenced by any active system functions, allowing for deletion when retention periods expire
+- **Housekeeping_Operations**: Automated database maintenance procedures that archive old settlement versions to optimize performance while preserving data integrity, including both archival to history tables and deletion of expired historical records
+- **Archival_Process**: The systematic movement of historical settlement versions from the main settlement table to the SETTLEMENT_HISTORY table based on configurable retention policies, followed by eventual deletion when records are no longer needed for compliance
 
 ## Requirements
 
@@ -179,6 +182,18 @@ The Payment Limit Monitoring System is a financial risk management application t
 7. WHEN exposure limits are changed frequently for operational or risk management purposes, THE Payment_Limit_Monitoring_System SHALL handle limit updates efficiently without performance degradation or lengthy recalculation processes
 8. THE Payment_Limit_Monitoring_System SHALL log all configuration changes and limit updates with timestamps and system identity
 
+### Requirement 9
+
+**User Story:** As a compliance officer, I want to access historical settlement data and review decisions, so that I can perform audits and ensure regulatory compliance.
+
+#### Acceptance Criteria
+
+1. WHEN querying historical data, THE Payment_Limit_Monitoring_System SHALL provide access to all settlement versions and their timestamps, including settlements of all directions, types, and business statuses with their complete information
+2. WHEN reviewing audit trails, THE Payment_Limit_Monitoring_System SHALL display all review actions, approvals, and system calculations with full traceability for settlements of all directions and business statuses
+3. WHEN generating reports, THE Payment_Limit_Monitoring_System SHALL export settlement data including direction, type, and business status, subtotals, and review status in standard formats, showing settlements of all directions and business statuses for complete transaction visibility
+4. WHEN data retention policies apply, THE Payment_Limit_Monitoring_System SHALL archive historical data while maintaining accessibility for compliance periods
+5. THE Payment_Limit_Monitoring_System SHALL ensure data integrity and prevent unauthorized modifications to historical records
+
 ### Requirement 10
 
 **User Story:** As a system architect, I want the system to handle distributed processing correctly, so that settlement data remains consistent across multiple system instances and concurrent operations.
@@ -270,14 +285,19 @@ The Payment Limit Monitoring System is a financial risk management application t
 - ABC123 now belongs to Group B and follows Group B's exposure limit
 - Both group subtotals are recalculated completely to ensure accuracy
 
-### Requirement 9
+### Requirement 14
 
-**User Story:** As a compliance officer, I want to access historical settlement data and review decisions, so that I can perform audits and ensure regulatory compliance.
+**User Story:** As a database administrator, I want to implement IT housekeeping procedures for settlement version management, so that I can maintain optimal database performance by archiving old settlement versions while preserving data integrity for active operations.
 
 #### Acceptance Criteria
 
-1. WHEN querying historical data, THE Payment_Limit_Monitoring_System SHALL provide access to all settlement versions and their timestamps, including settlements of all directions, types, and business statuses with their complete information
-2. WHEN reviewing audit trails, THE Payment_Limit_Monitoring_System SHALL display all review actions, approvals, and system calculations with full traceability for settlements of all directions and business statuses
-3. WHEN generating reports, THE Payment_Limit_Monitoring_System SHALL export settlement data including direction, type, and business status, subtotals, and review status in standard formats, showing settlements of all directions and business statuses for complete transaction visibility
-4. WHEN data retention policies apply, THE Payment_Limit_Monitoring_System SHALL archive historical data while maintaining accessibility for compliance periods
-5. THE Payment_Limit_Monitoring_System SHALL ensure data integrity and prevent unauthorized modifications to historical records
+1. WHEN a settlement has multiple versions stored in the main settlement table, THE Payment_Limit_Monitoring_System SHALL identify settlement versions that are older than the latest version for archival processing
+2. WHEN performing housekeeping operations, THE Payment_Limit_Monitoring_System SHALL move settlement versions older than the current active version to a dedicated SETTLEMENT_HISTORY table while preserving all original data fields for historical reference
+3. WHEN archiving old settlement versions, THE Payment_Limit_Monitoring_System SHALL ensure that the archival process does not affect active system operations, as historical versions are not referenced by any active system functions
+4. WHEN old settlement versions are moved to the SETTLEMENT_HISTORY table, THE Payment_Limit_Monitoring_System SHALL store them independently for audit purposes only, without requiring referential integrity to the main settlement table since they are not used by active operations
+5. WHEN housekeeping operations are executed, THE Payment_Limit_Monitoring_System SHALL perform the archival process during low-activity periods to minimize impact on real-time settlement processing
+6. WHEN compliance audits require historical data access, THE Payment_Limit_Monitoring_System SHALL provide query capabilities to access archived settlement versions from the SETTLEMENT_HISTORY table separately from active operations
+7. WHEN the SETTLEMENT_HISTORY table reaches configurable size thresholds or retention periods expire, THE Payment_Limit_Monitoring_System SHALL support deletion of archived records as they serve only historical audit purposes and are not referenced by any active system functions
+8. THE Payment_Limit_Monitoring_System SHALL maintain only the latest version of each settlement in the main table to optimize query performance for active settlement processing and limit monitoring
+9. THE Payment_Limit_Monitoring_System SHALL log all housekeeping operations including the number of records archived, deleted, timestamps, and any errors encountered during the maintenance process
+10. THE Payment_Limit_Monitoring_System SHALL provide configurable retention policies for determining when settlement versions become eligible for archival and subsequent deletion based on age, version count, or business compliance requirements
