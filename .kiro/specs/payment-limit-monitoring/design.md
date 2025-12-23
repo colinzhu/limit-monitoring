@@ -267,6 +267,107 @@ Event-Driven Processing (CORRECT):
 - **Audit Trail**: Complete event history for compliance and debugging, including group migration tracking
 - **Scalable Performance**: Can process 200,000 settlements in 5-10 minutes instead of 30 minutes
 
+#### Challenge 5: Settlement Version Accumulation and Database Performance Degradation
+
+**Problem**: Over time, as settlements receive multiple versions (due to updates, corrections, or business status changes), the main settlement table accumulates historical versions alongside current active versions. With millions of settlements each having 3-5 versions on average, the table grows to contain 15-20 million records where only 3-4 million are actually current. This causes:
+
+- **Query Performance Degradation**: Queries must filter through historical versions to find current data, slowing down real-time operations
+- **Index Bloat**: Database indexes become oversized, reducing lookup efficiency for active settlement processing
+- **Storage Overhead**: Disk space consumption grows exponentially with historical data that's rarely accessed
+- **Memory Pressure**: Database buffer pools are filled with historical data instead of frequently accessed current data
+- **Backup/Recovery Impact**: Database backups and recovery operations become slower due to increased data volume
+
+**Solution - Automated Settlement Version Archival**:
+
+The system implements a two-tier data architecture that separates active operational data from historical audit data:
+
+**Active Settlement Table (Performance Optimized)**:
+- Contains only the latest version of each settlement for real-time processing
+- Optimized indexes for fast group subtotal calculations and status queries
+- Minimal storage footprint for maximum query performance
+- All active system functions operate exclusively on this table
+
+**Settlement History Table (Audit Optimized)**:
+- Contains archived versions of settlements for compliance and audit purposes
+- Separate table structure optimized for historical queries and long-term storage
+- Not referenced by any active system functions (subtotal calculations, status monitoring, approval workflows)
+- Can be moved to slower storage tiers or deleted based on retention policies
+
+**Automated Housekeeping Process**:
+```typescript
+class SettlementHousekeepingService {
+  async performVersionArchival() {
+    // 1. Identify settlements with multiple versions
+    const settlementsToArchive = await this.identifyOldVersions();
+    
+    // 2. Move old versions to history table in batches
+    for (const batch of this.batchify(settlementsToArchive, 1000)) {
+      await this.archiveVersionsBatch(batch);
+    }
+    
+    // 3. Verify data integrity and update housekeeping logs
+    await this.verifyArchivalIntegrity();
+    await this.logHousekeepingOperation(settlementsToArchive.length);
+  }
+  
+  private async identifyOldVersions(): Promise<SettlementVersion[]> {
+    // Find all settlement versions that are not the latest version
+    const query = `
+      SELECT s1.settlement_id, s1.settlement_version, s1.*
+      FROM settlements s1
+      WHERE s1.settlement_version < (
+        SELECT MAX(s2.settlement_version)
+        FROM settlements s2
+        WHERE s2.settlement_id = s1.settlement_id
+      )
+      AND s1.created_at < NOW() - INTERVAL '7 days'  -- Grace period for recent updates
+      ORDER BY s1.settlement_id, s1.settlement_version
+    `;
+    return await db.query(query);
+  }
+  
+  private async archiveVersionsBatch(versions: SettlementVersion[]): Promise<void> {
+    await db.transaction(async (tx) => {
+      // 1. Insert old versions into history table
+      await tx.query(`
+        INSERT INTO settlement_history 
+        SELECT * FROM settlements 
+        WHERE (settlement_id, settlement_version) IN (${this.buildVersionPairs(versions)})
+      `);
+      
+      // 2. Remove old versions from main table
+      await tx.query(`
+        DELETE FROM settlements 
+        WHERE (settlement_id, settlement_version) IN (${this.buildVersionPairs(versions)})
+      `);
+    });
+  }
+}
+```
+
+**Housekeeping Schedule**:
+- **Daily Archival**: Move settlement versions older than 7 days to history table
+- **Weekly Cleanup**: Delete history records older than retention period (configurable: 2-7 years)
+- **Monthly Optimization**: Rebuild indexes and update table statistics for optimal performance
+- **Low-Impact Timing**: Operations scheduled during off-peak hours to minimize system impact
+
+**Benefits of Version Archival Approach**:
+- **Query Performance**: 70-80% improvement in settlement lookup and subtotal calculation speed
+- **Storage Efficiency**: 60-70% reduction in main table size, with historical data in cost-effective storage
+- **Index Optimization**: Smaller indexes provide faster lookups for active settlement processing
+- **Memory Utilization**: Database cache focused on frequently accessed current data
+- **Backup Efficiency**: Faster backup and recovery operations for operational data
+- **Compliance Maintained**: Complete audit trail preserved in history table for regulatory requirements
+- **Scalable Growth**: System performance remains stable as settlement volume increases over time
+
+**Data Integrity Safeguards**:
+- **Referential Integrity**: History table maintains complete settlement data without foreign key constraints to active tables
+- **Audit Trail Continuity**: Audit queries can access both current and historical data through unified views
+- **Recovery Capability**: Archived data can be restored to main table if needed for investigation
+- **Verification Process**: Automated checks ensure no data loss during archival operations
+
+This approach ensures that the system maintains optimal performance for real-time operations while preserving complete historical data for compliance and audit purposes.
+
 ### Simple Event-Driven Architecture Solution
 
 Instead of trying to solve complex race conditions with locks and atomic operations, let's use a fundamentally different approach that eliminates the problems entirely.
