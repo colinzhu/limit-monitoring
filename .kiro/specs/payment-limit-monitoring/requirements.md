@@ -7,6 +7,7 @@ The Payment Limit Monitoring System is a financial risk management application t
 ## Glossary
 
 - **Payment_Limit_Monitoring_System**: The software system that monitors settlement flows and enforces exposure limits
+- **System**: The Payment Limit Monitoring System (used throughout requirements for brevity)
 - **Settlement**: A financial transaction record containing payment information between entities
 - **Settlement_Direction**: The direction of a settlement transaction, either PAY (outgoing payment) or RECEIVE (incoming payment)
 - **Settlement_Type**: The settlement processing type, either NET (netted from multiple settlements) or GROSS (individual settlement)
@@ -44,24 +45,25 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN a settlement flow is received from an endpoint, THE Payment_Limit_Monitoring_System SHALL validate and store the settlement data including PTS, Processing_Entity, Counterparty_ID, Value_Date, Currency, Amount, Settlement_ID, Settlement_Version, Settlement_Direction (PAY or RECEIVE), Settlement_Type (NET or GROSS), and Business_Status (PENDING, INVALID, VERIFIED, or CANCELLED)
-2. WHEN a settlement is received, THE Payment_Limit_Monitoring_System SHALL evaluate the settlement against current filtering rules to determine if it should be included in subtotal calculations
-3. WHEN a settlement has direction PAY and business status is PENDING, INVALID, or VERIFIED, THE Payment_Limit_Monitoring_System SHALL include it in group subtotal calculations for risk exposure monitoring
-4. WHEN a settlement has direction RECEIVE or business status is CANCELLED, THE Payment_Limit_Monitoring_System SHALL store the settlement but exclude it from subtotal calculations
-5. WHEN a NET settlement is received, THE Payment_Limit_Monitoring_System SHALL handle potential direction changes between PAY and RECEIVE as the netted result may fluctuate based on underlying settlement updates
-6. WHEN a settlement matches the filtering criteria, has direction PAY, and business status is not CANCELLED, THE Payment_Limit_Monitoring_System SHALL include it in group subtotal calculations and limit monitoring
-7. WHEN a settlement does not match the filtering criteria, has direction RECEIVE, or has business status CANCELLED, THE Payment_Limit_Monitoring_System SHALL store the settlement but exclude it from subtotal calculations and limit monitoring
-8. WHEN multiple versions of the same Settlement_ID are received, THE Payment_Limit_Monitoring_System SHALL maintain the latest version and preserve historical versions for audit purposes
-9. WHEN settlement versions are received out of chronological order, THE Payment_Limit_Monitoring_System SHALL determine the correct latest version based on Settlement_Version number and apply only the most recent version to subtotal calculations
-10. WHEN an older version of a settlement arrives after a newer version has already been processed, THE Payment_Limit_Monitoring_System SHALL store the historical version but SHALL NOT recalculate subtotals or update settlement statuses
-11. WHEN multiple settlement updates for the same group are processed concurrently across different system instances, THE Payment_Limit_Monitoring_System SHALL ensure subtotal calculation consistency through appropriate concurrency control mechanisms
-12. WHEN concurrent settlement processing occurs, THE Payment_Limit_Monitoring_System SHALL prevent subtotal overwrites and ensure that the final subtotal reflects all valid settlement updates within the group
-9. WHEN a settlement version updates the business status from VERIFIED to CANCELLED, THE Payment_Limit_Monitoring_System SHALL exclude the settlement from subtotal calculations and recalculate the group total using appropriate concurrency control to prevent race conditions
-10. WHEN a settlement version updates the business status from CANCELLED to PENDING, INVALID, or VERIFIED, THE Payment_Limit_Monitoring_System SHALL include the settlement in subtotal calculations if it has direction PAY and recalculate the group total using appropriate concurrency control to prevent race conditions
-11. WHEN settlement data is stored, THE Payment_Limit_Monitoring_System SHALL preserve the original currency and amount while enabling USD equivalent calculation for subtotal aggregation
-12. WHEN a settlement flow contains invalid or incomplete data, THE Payment_Limit_Monitoring_System SHALL reject the settlement and log the error for investigation
-13. THE Payment_Limit_Monitoring_System SHALL fetch the latest filtering rules from the external rule system every 5 minutes to ensure current criteria are applied
-14. THE Payment_Limit_Monitoring_System SHALL process settlement flows continuously without interruption
+1. WHEN a settlement flow is received from an endpoint, the System SHALL validate and store the settlement data including PTS, Processing_Entity, Counterparty_ID, Value_Date, Currency, Amount, Settlement_ID, Settlement_Version, Settlement_Direction (PAY or RECEIVE), Settlement_Type (NET or GROSS), and Business_Status (PENDING, INVALID, VERIFIED, or CANCELLED)
+2. WHEN a settlement is received, the System SHALL evaluate the settlement against current filtering rules to determine if it should be included in subtotal calculations
+3. WHEN a settlement has direction PAY and business status is PENDING, INVALID, or VERIFIED, the System SHALL include it in group subtotal calculations for risk exposure monitoring
+4. WHEN a settlement has direction RECEIVE or business status is CANCELLED, the System SHALL store the settlement but exclude it from subtotal calculations
+5. WHEN a NET settlement is received, the System SHALL handle potential direction changes between PAY and RECEIVE as the netted result may fluctuate based on underlying settlement updates
+6. WHEN a settlement matches the filtering criteria, has direction PAY, and business status is not CANCELLED, the System SHALL include it in group subtotal calculations and limit monitoring
+7. WHEN a settlement does not match the filtering criteria, has direction RECEIVE, or has business status CANCELLED, the System SHALL store the settlement but exclude it from subtotal calculations and limit monitoring
+8. WHEN multiple versions of the same Settlement_ID are received, the System SHALL maintain the latest version and preserve historical versions for audit purposes
+9. WHEN settlement versions are received out of chronological order, the System SHALL determine the correct latest version based on Settlement_Version number and apply only the most recent version to subtotal calculations
+10. WHEN an older version of a settlement arrives after a newer version has already been processed, the System SHALL store the historical version but SHALL NOT recalculate subtotals or update settlement statuses
+11. WHEN multiple settlement updates for the same group are processed concurrently across different system instances, the System SHALL ensure subtotal calculation consistency through appropriate concurrency control mechanisms
+12. WHEN concurrent settlement processing occurs, the System SHALL prevent subtotal overwrites and ensure that the final subtotal reflects all valid settlement updates within the group
+13. WHEN a settlement version updates the business status from VERIFIED to CANCELLED, the System SHALL exclude the settlement from subtotal calculations and recalculate the group total using appropriate concurrency control to prevent race conditions
+14. WHEN a settlement version updates the business status from CANCELLED to PENDING, INVALID, or VERIFIED, the System SHALL include the settlement in subtotal calculations if it has direction PAY and recalculate the group total using appropriate concurrency control to prevent race conditions
+15. WHEN settlement data is stored, the System SHALL preserve the original currency and amount while enabling USD equivalent calculation for subtotal aggregation
+16. WHEN a settlement flow contains invalid or incomplete data (missing required fields, invalid currency codes, non-numeric amounts, or invalid date formats), the System SHALL reject the settlement and log the error for investigation
+17. THE System SHALL fetch the latest filtering rules from the external rule system every 5 minutes to ensure current criteria are applied
+18. THE System SHALL process settlement flows continuously without interruption
+19. THE System SHALL apply cached filtering rules to settlements received between rule fetches, and re-evaluate affected groups when new rules are fetched
 
 ### Requirement 2
 
@@ -69,16 +71,16 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN settlements are processed, THE Payment_Limit_Monitoring_System SHALL group PAY settlements with business status PENDING, INVALID, or VERIFIED by PTS, Processing_Entity, Counterparty_ID, and Value_Date
-2. WHEN calculating subtotals, THE Payment_Limit_Monitoring_System SHALL recalculate the complete group subtotal by summing all currently included PAY settlements with business status not CANCELLED, rather than incrementally adding or subtracting individual settlement changes
-3. WHEN a new PAY settlement with business status PENDING, INVALID, or VERIFIED is received for an existing group, THE Payment_Limit_Monitoring_System SHALL recalculate the complete group subtotal immediately
-4. WHEN a settlement version is updated with a new amount, direction change, or business status change, THE Payment_Limit_Monitoring_System SHALL recalculate the complete group subtotal using all current settlement versions rather than applying incremental changes
-5. WHEN a settlement version changes its inclusion criteria (direction, business status, or filtering rule match), THE Payment_Limit_Monitoring_System SHALL recalculate the complete group subtotal to reflect the current set of included settlements
-6. WHEN a NET settlement direction changes between PAY and RECEIVE due to underlying settlement updates, THE Payment_Limit_Monitoring_System SHALL recalculate the complete group subtotal to reflect the current settlement state
-7. WHEN a settlement version updates the Counterparty_ID, PTS, Processing_Entity, or Value_Date, THE Payment_Limit_Monitoring_System SHALL move the settlement to the appropriate new group and recalculate complete subtotals for both affected groups using all current settlement versions in each group
-8. WHEN a settlement receives a new version, THE Payment_Limit_Monitoring_System SHALL reset any existing approval status and re-evaluate the settlement status based on the updated information and recalculated group subtotal
-9. WHEN filtering rules are updated from the rule system, THE Payment_Limit_Monitoring_System SHALL re-evaluate existing settlements against the new criteria and recalculate complete subtotals for all affected groups
-10. THE Payment_Limit_Monitoring_System SHALL maintain accurate subtotals across all active settlement groups by performing complete recalculation rather than incremental updates to ensure data consistency
+1. WHEN settlements are processed, the System SHALL group PAY settlements with business status PENDING, INVALID, or VERIFIED by PTS, Processing_Entity, Counterparty_ID, and Value_Date
+2. WHEN calculating subtotals, the System SHALL recalculate the complete group subtotal by summing all currently included PAY settlements with business status not CANCELLED, rather than incrementally adding or subtracting individual settlement changes
+3. WHEN a new PAY settlement with business status PENDING, INVALID, or VERIFIED is received for an existing group, the System SHALL recalculate the complete group subtotal immediately
+4. WHEN a settlement version is updated with a new amount, direction change, or business status change, the System SHALL recalculate the complete group subtotal using all current settlement versions rather than applying incremental changes
+5. WHEN a settlement version changes its inclusion criteria (direction, business status, or filtering rule match), the System SHALL recalculate the complete group subtotal to reflect the current set of included settlements
+6. WHEN a NET settlement direction changes between PAY and RECEIVE due to underlying settlement updates, the System SHALL recalculate the complete group subtotal to reflect the current settlement state
+7. WHEN a settlement version updates the Counterparty_ID, PTS, Processing_Entity, or Value_Date, the System SHALL move the settlement to the appropriate new group and recalculate complete subtotals for both affected groups using all current settlement versions in each group
+8. WHEN a settlement receives a new version, the System SHALL reset any existing approval status and re-evaluate the settlement status based on the updated information and recalculated group subtotal
+9. WHEN filtering rules are updated from the rule system, the System SHALL re-evaluate existing settlements against the new criteria and recalculate complete subtotals for all affected groups
+10. THE System SHALL maintain accurate subtotals across all active settlement groups by performing complete recalculation rather than incremental updates to ensure data consistency
 
 ### Requirement 3
 
@@ -86,14 +88,14 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN a PAY settlement with business status PENDING, INVALID, or VERIFIED is processed and its group subtotal is within the Exposure_Limit, THE Payment_Limit_Monitoring_System SHALL set the settlement status to CREATED
-2. WHEN a PAY settlement with business status PENDING, INVALID, or VERIFIED is processed and its group subtotal exceeds the Exposure_Limit, THE Payment_Limit_Monitoring_System SHALL set the settlement status to BLOCKED
-3. WHEN a RECEIVE settlement or a settlement with business status CANCELLED is processed, THE Payment_Limit_Monitoring_System SHALL set the settlement status to CREATED as these settlements do not contribute to risk exposure
-4. WHEN a NET settlement changes direction from RECEIVE to PAY with business status not CANCELLED and causes the group subtotal to exceed the Exposure_Limit, THE Payment_Limit_Monitoring_System SHALL update the settlement status to BLOCKED
-5. WHEN a NET settlement changes direction from PAY to RECEIVE or business status changes to CANCELLED, THE Payment_Limit_Monitoring_System SHALL update the settlement status to CREATED and recalculate the complete group subtotal
-6. WHEN the Exposure_Limit is updated, THE Payment_Limit_Monitoring_System SHALL re-evaluate all settlement statuses against the new limit
-4. WHEN a settlement moves between groups due to version updates, THE Payment_Limit_Monitoring_System SHALL update the settlement status based on the new group's subtotal
-5. THE Payment_Limit_Monitoring_System SHALL display settlement records with their current status in the user interface
+1. WHEN a PAY settlement with business status PENDING, INVALID, or VERIFIED is processed and its group subtotal is within the Exposure_Limit, the System SHALL set the settlement status to CREATED
+2. WHEN a PAY settlement with business status PENDING, INVALID, or VERIFIED is processed and its group subtotal exceeds the Exposure_Limit, the System SHALL set the settlement status to BLOCKED
+3. WHEN a RECEIVE settlement or a settlement with business status CANCELLED is processed, the System SHALL set the settlement status to CREATED as these settlements do not contribute to risk exposure
+4. WHEN a NET settlement changes direction from RECEIVE to PAY with business status not CANCELLED and causes the group subtotal to exceed the Exposure_Limit, the System SHALL update the settlement status to BLOCKED
+5. WHEN a NET settlement changes direction from PAY to RECEIVE or business status changes to CANCELLED, the System SHALL update the settlement status to CREATED and recalculate the complete group subtotal
+6. WHEN the Exposure_Limit is updated, the System SHALL re-evaluate all settlement statuses against the new limit
+7. WHEN a settlement moves between groups due to version updates, the System SHALL update the settlement status based on the new group's subtotal
+8. THE System SHALL display settlement records with their current status in the user interface
 
 ### Requirement 4
 
@@ -101,15 +103,16 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN viewing BLOCKED settlements, THE Payment_Limit_Monitoring_System SHALL display only PAY settlements with business status VERIFIED that are blocked due to limit exceedance, along with settlement details and group information including PTS, Processing_Entity, Counterparty_ID, Value_Date, Settlement_Direction, Settlement_Type, Business_Status, and current group subtotal
-2. WHEN an operation team member clicks REQUEST RELEASE for a BLOCKED PAY settlement with business status VERIFIED, THE Payment_Limit_Monitoring_System SHALL change the settlement status to PENDING_AUTHORISE and record the action with user identity and timestamp
-3. WHEN a different operation team member clicks AUTHORISE for a PENDING_AUTHORISE settlement with business status VERIFIED, THE Payment_Limit_Monitoring_System SHALL change the settlement status to AUTHORISED and record the action with user identity and timestamp
-4. WHEN the same operation team member attempts to perform both REQUEST RELEASE and AUTHORISE actions on the same settlement, THE Payment_Limit_Monitoring_System SHALL prevent the action and display an error message
-5. WHEN a settlement receives a new version that changes its business status from VERIFIED to PENDING, INVALID, or CANCELLED, THE Payment_Limit_Monitoring_System SHALL reset the settlement status based on the new business status and group subtotal, and invalidate all previous approval actions
-6. WHEN a settlement with business status PENDING or INVALID is blocked due to limit exceedance, THE Payment_Limit_Monitoring_System SHALL display the settlement as BLOCKED but SHALL NOT provide REQUEST RELEASE functionality until the business status becomes VERIFIED
-6. WHEN selecting multiple settlements for bulk actions, THE Payment_Limit_Monitoring_System SHALL only allow selection of VERIFIED settlements that belong to the same group (same PTS, Processing_Entity, Counterparty_ID, and Value_Date)
-7. WHEN performing bulk REQUEST RELEASE or AUTHORISE actions, THE Payment_Limit_Monitoring_System SHALL apply the action to all selected VERIFIED settlements and record individual audit entries for each settlement
-8. THE Payment_Limit_Monitoring_System SHALL maintain a complete audit trail of all user actions including REQUEST RELEASE and AUTHORISE operations with timestamps, user identities, settlement details, and version information for VERIFIED settlements only
+1. WHEN viewing BLOCKED settlements, the System SHALL display only PAY settlements with business status VERIFIED that are blocked due to limit exceedance, along with settlement details and group information including PTS, Processing_Entity, Counterparty_ID, Value_Date, Settlement_Direction, Settlement_Type, Business_Status, and current group subtotal
+2. WHEN an operation team member clicks REQUEST RELEASE for a BLOCKED PAY settlement with business status VERIFIED, the System SHALL change the settlement status to PENDING_AUTHORISE and record the action with user identity and timestamp
+3. WHEN a different operation team member clicks AUTHORISE for a PENDING_AUTHORISE settlement with business status VERIFIED, the System SHALL change the settlement status to AUTHORISED and record the action with user identity and timestamp
+4. WHEN the same operation team member attempts to perform both REQUEST RELEASE and AUTHORISE actions on the same settlement, the System SHALL prevent the action and display an error message
+5. WHEN a settlement receives a new version that changes its business status from VERIFIED to PENDING, INVALID, or CANCELLED, the System SHALL reset the settlement status based on the new business status and group subtotal, and invalidate all previous approval actions
+6. WHEN a settlement with business status PENDING or INVALID is blocked due to limit exceedance, the System SHALL display the settlement as BLOCKED but SHALL NOT provide REQUEST RELEASE functionality until the business status becomes VERIFIED
+7. WHEN selecting multiple settlements for bulk actions, the System SHALL only allow selection of VERIFIED settlements that belong to the same group (same PTS, Processing_Entity, Counterparty_ID, and Value_Date)
+8. WHEN performing bulk REQUEST RELEASE or AUTHORISE actions, the System SHALL apply the action to all selected VERIFIED settlements and record individual audit entries for each settlement
+9. THE System SHALL maintain a complete audit trail of all user actions including REQUEST RELEASE and AUTHORISE operations with timestamps, user identities, settlement details, and version information for VERIFIED settlements only
+10. WHEN a settlement status is PENDING_AUTHORISE or AUTHORISED, the System SHALL display approval workflow information including request timestamp, authorize timestamp (if applicable), and user identities who performed the actions
 
 ### Requirement 5
 
@@ -117,11 +120,11 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN processing settlement flows during peak periods, THE Payment_Limit_Monitoring_System SHALL handle up to 200,000 settlements within 30 minutes without system failure while maintaining data consistency across multiple system instances
-2. WHEN a settlement is received and processed, THE Payment_Limit_Monitoring_System SHALL make the updated status available in the user interface within 30 seconds of receipt, ensuring consistency across all system instances
-2. WHEN calculating subtotals for PAY settlement groups, THE Payment_Limit_Monitoring_System SHALL complete the recalculation within 10 seconds of receiving a new settlement, accounting for potential direction changes in NET settlements and ensuring complete group recalculation rather than incremental updates, while preventing concurrent calculation conflicts
-4. WHEN users query settlement status via API, THE Payment_Limit_Monitoring_System SHALL respond within 3 seconds under normal load conditions
-5. THE Payment_Limit_Monitoring_System SHALL maintain acceptable response times for user interface operations even during peak settlement processing periods
+1. WHEN processing settlement flows during peak periods, the System SHALL handle up to 200,000 settlements within 30 minutes without system failure while maintaining data consistency across multiple system instances
+2. WHEN a settlement is received and processed, the System SHALL make the updated status available in the user interface within 30 seconds of receipt, ensuring consistency across all system instances
+3. WHEN calculating subtotals for PAY settlement groups, the System SHALL complete the recalculation within 10 seconds of receiving a new settlement, accounting for potential direction changes in NET settlements and ensuring complete group recalculation rather than incremental updates, while preventing concurrent calculation conflicts
+4. WHEN users query settlement status via API, the System SHALL respond within 3 seconds under normal load conditions
+5. THE System SHALL maintain acceptable response times for user interface operations even during peak settlement processing periods
 
 ### Requirement 6
 
@@ -129,15 +132,15 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN using the search interface, THE Payment_Limit_Monitoring_System SHALL allow filtering by PTS, Processing_Entity, Value_Date, Counterparty_ID, Settlement_Direction (PAY or RECEIVE), Settlement_Type (NET or GROSS), and Business_Status (PENDING, INVALID, VERIFIED, or CANCELLED)
-2. WHEN searching settlements, THE Payment_Limit_Monitoring_System SHALL provide a filter option to show only PAY settlements with business status not CANCELLED in groups that exceed the limit, only PAY settlements that do not exceed the limit, or all settlements regardless of direction and business status
-3. WHEN multiple search criteria are applied, THE Payment_Limit_Monitoring_System SHALL return settlements that match all specified criteria
-4. WHEN displaying search results, THE Payment_Limit_Monitoring_System SHALL show settlement details including direction, type, and business status, current status, and group subtotal information calculated from PAY settlements with business status not CANCELLED, while displaying all settlements regardless of direction and business status in the results
-5. THE Payment_Limit_Monitoring_System SHALL provide search results in a paginated format for efficient browsing of large result sets
-6. WHEN users want to export search results, THE Payment_Limit_Monitoring_System SHALL allow downloading the filtered settlements as an Excel file containing all relevant settlement details and status information for settlements of all directions and business statuses
-7. WHEN displaying the user interface, THE Payment_Limit_Monitoring_System SHALL show settlement groups in the upper section and individual settlements in the lower section, including settlements of all directions and business statuses for complete visibility
-8. WHEN a user clicks on a settlement group in the upper section, THE Payment_Limit_Monitoring_System SHALL display all settlements belonging to that group in the lower section with their individual details, statuses, direction, and business status indicators
-9. WHEN displaying settlement information, THE Payment_Limit_Monitoring_System SHALL show sufficient context including settlement direction, type, and business status, group subtotal in USD calculated from PAY settlements with business status not CANCELLED, exposure limit, current exchange rates as reference for currency conversion, and filtering rule application status to explain why PAY settlements are BLOCKED or not BLOCKED
+1. WHEN using the search interface, the System SHALL allow filtering by PTS, Processing_Entity, Value_Date, Counterparty_ID, Settlement_Direction (PAY or RECEIVE), Settlement_Type (NET or GROSS), and Business_Status (PENDING, INVALID, VERIFIED, or CANCELLED)
+2. WHEN searching settlements, the System SHALL provide a filter option to show only PAY settlements with business status not CANCELLED in groups that exceed the limit, only PAY settlements that do not exceed the limit, or all settlements regardless of direction and business status
+3. WHEN multiple search criteria are applied, the System SHALL return settlements that match all specified criteria
+4. WHEN displaying search results, the System SHALL show settlement details including direction, type, and business status, current status, and group subtotal information calculated from PAY settlements with business status not CANCELLED, while displaying all settlements regardless of direction and business status in the results
+5. THE System SHALL provide search results in a paginated format for efficient browsing of large result sets
+6. WHEN users want to export search results, the System SHALL allow downloading the filtered settlements as an Excel file containing all relevant settlement details and status information for settlements of all directions and business statuses
+7. WHEN displaying the user interface, the System SHALL show settlement groups in the upper section and individual settlements in the lower section, including settlements of all directions and business statuses for complete visibility
+8. WHEN a user clicks on a settlement group in the upper section, the System SHALL display all settlements belonging to that group in the lower section with their individual details, statuses, direction, and business status indicators
+9. WHEN displaying settlement information, the System SHALL show sufficient context including settlement direction, type, and business status, group subtotal in USD calculated from PAY settlements with business status not CANCELLED, exposure limit, current exchange rates as reference for currency conversion, and filtering rule application status to explain why PAY settlements are BLOCKED or not BLOCKED
 
 ### Requirement 7
 
@@ -145,14 +148,16 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN an external system queries by Settlement_ID, THE Payment_Limit_Monitoring_System SHALL return the current settlement status (CREATED, BLOCKED, PENDING_AUTHORISE, or AUTHORISED) along with settlement direction, type, and business status information for all settlements
-2. WHEN a settlement status is BLOCKED, THE Payment_Limit_Monitoring_System SHALL include detailed information explaining why the PAY settlement is blocked, including group subtotal calculated from PAY settlements with business status not CANCELLED, exposure limit, and affected counterparty details
-3. WHEN a settlement status is PENDING_AUTHORISE or AUTHORISED, THE Payment_Limit_Monitoring_System SHALL include approval workflow information including timestamps and user actions taken
-4. WHEN a Settlement_ID is not found, THE Payment_Limit_Monitoring_System SHALL return an appropriate error response with clear messaging
-5. THE Payment_Limit_Monitoring_System SHALL provide API responses in a structured format with sufficient detail to prevent follow-up queries for clarification
-6. WHEN a settlement status changes to AUTHORISED, THE Payment_Limit_Monitoring_System SHALL send a notification to external systems containing the Settlement_ID and authorization details to trigger downstream processing
-7. WHEN a manual recalculation is requested via API endpoint with scope criteria (PTS, Processing_Entity, from_Value_Date), THE Payment_Limit_Monitoring_System SHALL recalculate subtotals from PAY settlements with business status not CANCELLED and update settlement statuses for all settlements matching the specified criteria
-8. WHEN performing manual recalculation, THE Payment_Limit_Monitoring_System SHALL apply current filtering rules and exposure limits to determine updated settlement statuses within the specified scope
+1. WHEN an external system queries by Settlement_ID, the System SHALL return the current settlement status (CREATED, BLOCKED, PENDING_AUTHORISE, or AUTHORISED) along with settlement direction, type, and business status information for all settlements
+2. WHEN a settlement status is BLOCKED, the System SHALL include detailed information explaining why the PAY settlement is blocked, including group subtotal calculated from PAY settlements with business status not CANCELLED, exposure limit, and affected counterparty details
+3. WHEN a settlement status is PENDING_AUTHORISE or AUTHORISED, the System SHALL include approval workflow information including timestamps and user actions taken
+4. WHEN a Settlement_ID is not found, the System SHALL return an appropriate error response with clear messaging
+5. THE System SHALL provide API responses in a structured format with sufficient detail to prevent follow-up queries for clarification
+6. WHEN a settlement status changes to AUTHORISED, the System SHALL send a notification to external systems containing the Settlement_ID and authorization details to trigger downstream processing
+7. WHEN a manual recalculation is requested via API endpoint with scope criteria (PTS, Processing_Entity, from_Value_Date), the System SHALL recalculate subtotals from PAY settlements with business status not CANCELLED and update settlement statuses for all settlements matching the specified criteria
+8. WHEN performing manual recalculation, the System SHALL apply current filtering rules and exposure limits to determine updated settlement statuses within the specified scope
+9. WHEN a manual recalculation is requested, the System SHALL require appropriate authorization and log the request with user identity, timestamp, and scope
+10. WHEN external systems are unavailable to receive notifications, the System SHALL implement retry mechanism with exponential backoff for up to 24 hours
 
 ### Requirement 8
 
@@ -160,35 +165,142 @@ The Payment Limit Monitoring System is a financial risk management application t
 
 #### Acceptance Criteria
 
-1. WHEN operating in MVP mode, THE Payment_Limit_Monitoring_System SHALL use a fixed Exposure_Limit of 500 million USD for all counterparties
-2. WHEN configured for advanced mode, THE Payment_Limit_Monitoring_System SHALL fetch counterparty-specific exposure limits from an external system daily and apply the appropriate limit based on the settlement's Counterparty_ID
-3. THE Payment_Limit_Monitoring_System SHALL automatically fetch and store exchange rates from external systems daily for currency conversion
-4. WHEN currency conversion is required, THE Payment_Limit_Monitoring_System SHALL use the latest available exchange rate at the time of settlement processing to convert amounts to USD equivalent
-5. WHEN new exchange rates are fetched and stored, THE Payment_Limit_Monitoring_System SHALL make them available for future settlement processing without recalculating existing subtotals
-6. WHEN counterparty-specific limits are updated, THE Payment_Limit_Monitoring_System SHALL re-evaluate all affected settlement groups against their respective new limits
-7. THE Payment_Limit_Monitoring_System SHALL log all configuration changes and limit updates with timestamps and system identity
+1. WHEN operating in MVP mode, the System SHALL use a fixed Exposure_Limit of 500 million USD for all counterparties
+2. WHEN configured for advanced mode, the System SHALL fetch counterparty-specific exposure limits from an external system daily and apply the appropriate limit based on the settlement's Counterparty_ID
+3. THE System SHALL automatically fetch and store exchange rates from external systems daily for currency conversion
+4. WHEN currency conversion is required, the System SHALL use the latest available exchange rate at the time of settlement processing to convert amounts to USD equivalent
+5. WHEN new exchange rates are fetched and stored, the System SHALL make them available for future settlement processing without recalculating existing subtotals
+6. WHEN counterparty-specific limits are updated, the System SHALL re-evaluate all affected settlement groups against their respective new limits
+7. THE System SHALL log all configuration changes and limit updates with timestamps and system identity
+8. WHEN exchange rates are older than 24 hours, the System SHALL flag this in the UI and API responses to indicate potential rate staleness
+9. THE System SHALL maintain a history of exchange rate changes for audit purposes
 
-### Requirement 10
+### Requirement 9
 
 **User Story:** As a system architect, I want the system to handle distributed processing correctly, so that settlement data remains consistent across multiple system instances and concurrent operations.
 
 #### Acceptance Criteria
 
-1. WHEN the system operates with multiple instances behind a load balancer, THE Payment_Limit_Monitoring_System SHALL ensure that settlement processing and subtotal calculations remain consistent across all instances
-2. WHEN settlement versions arrive out of chronological order due to network delays or processing differences, THE Payment_Limit_Monitoring_System SHALL apply only the latest version based on Settlement_Version number to subtotal calculations
-3. WHEN multiple settlements within the same group are processed concurrently by different system instances, THE Payment_Limit_Monitoring_System SHALL use appropriate locking or atomic operations to prevent subtotal calculation race conditions
-4. WHEN a settlement version update conflicts with concurrent processing, THE Payment_Limit_Monitoring_System SHALL ensure data consistency through proper transaction isolation or retry mechanisms
-5. WHEN system instances restart or fail during settlement processing, THE Payment_Limit_Monitoring_System SHALL maintain data integrity and resume processing without data loss or corruption
-6. THE Payment_Limit_Monitoring_System SHALL provide idempotent settlement processing to handle duplicate settlement submissions without creating inconsistent state
+1. WHEN the system operates with multiple instances behind a load balancer, the System SHALL ensure that settlement processing and subtotal calculations remain consistent across all instances
+2. WHEN settlement versions arrive out of chronological order due to network delays or processing differences, the System SHALL apply only the latest version based on Settlement_Version number to subtotal calculations
+3. WHEN multiple settlements within the same group are processed concurrently by different system instances, the System SHALL use appropriate locking or atomic operations to prevent subtotal calculation race conditions
+4. WHEN a settlement version update conflicts with concurrent processing, the System SHALL ensure data consistency through proper transaction isolation or retry mechanisms
+5. WHEN system instances restart or fail during settlement processing, the System SHALL maintain data integrity and resume processing without data loss or corruption
+6. THE System SHALL provide idempotent settlement processing to handle duplicate settlement submissions without creating inconsistent state
 
-### Requirement 9
+### Requirement 10
 
 **User Story:** As a compliance officer, I want to access historical settlement data and review decisions, so that I can perform audits and ensure regulatory compliance.
 
 #### Acceptance Criteria
 
-1. WHEN querying historical data, THE Payment_Limit_Monitoring_System SHALL provide access to all settlement versions and their timestamps, including settlements of all directions, types, and business statuses with their complete information
-2. WHEN reviewing audit trails, THE Payment_Limit_Monitoring_System SHALL display all review actions, approvals, and system calculations with full traceability for settlements of all directions and business statuses
-3. WHEN generating reports, THE Payment_Limit_Monitoring_System SHALL export settlement data including direction, type, and business status, subtotals, and review status in standard formats, showing settlements of all directions and business statuses for complete transaction visibility
-4. WHEN data retention policies apply, THE Payment_Limit_Monitoring_System SHALL archive historical data while maintaining accessibility for compliance periods
-5. THE Payment_Limit_Monitoring_System SHALL ensure data integrity and prevent unauthorized modifications to historical records
+1. WHEN querying historical data, the System SHALL provide access to all settlement versions and their timestamps, including settlements of all directions, types, and business statuses with their complete information
+2. WHEN reviewing audit trails, the System SHALL display all review actions, approvals, and system calculations with full traceability for settlements of all directions and business statuses
+3. WHEN generating reports, the System SHALL export settlement data including direction, type, and business status, subtotals, and review status in standard formats, showing settlements of all directions and business statuses for complete transaction visibility
+4. WHEN data retention policies apply, the System SHALL archive historical data while maintaining accessibility for compliance periods (7 years as defined in glossary)
+5. THE System SHALL ensure data integrity and prevent unauthorized modifications to historical records
+6. THE System SHALL provide audit reports showing all settlement version changes, approval workflow actions, and system recalculations with timestamps and user identities
+
+## Implementation Clarifications
+
+This section provides additional context to resolve ambiguities in the acceptance criteria above.
+
+### Performance vs. Consistency Trade-offs
+
+**Clarification for Requirement 2 AC 2 (Complete Recalculation):**
+- The requirement to recalculate complete group subtotals on every change is intentional for data consistency
+- To meet performance targets (Requirement 5), the system should use:
+  - Materialized views or cached group subtotals that are updated asynchronously
+  - A single-threaded background processor to avoid race conditions
+  - Event sourcing pattern to replay settlements for recalculation
+- Status availability within 30 seconds (Requirement 5 AC 2) is achievable through:
+  - Immediate settlement storage (ingestion)
+  - Async background processing for group updates
+  - Query-time status computation from cached subtotals
+
+### Settlement Validation Rules
+
+**Clarification for Requirement 1 AC 16:**
+Invalid or incomplete data includes:
+- Missing required fields: PTS, Processing_Entity, Counterparty_ID, Value_Date, Currency, Amount, Settlement_ID, Settlement_Version, Settlement_Direction, Settlement_Type, Business_Status
+- Invalid currency codes (not ISO 4217 compliant)
+- Non-numeric amounts or negative amounts
+- Invalid date formats or dates in the past (for future-dated settlements)
+- Invalid Settlement_Direction (not PAY or RECEIVE)
+- Invalid Settlement_Type (not NET or GROSS)
+- Invalid Business_Status (not PENDING, INVALID, VERIFIED, or CANCELLED)
+
+### Approval Workflow Security
+
+**Clarification for Requirement 4 AC 4:**
+- The system should prevent the same user from both requesting and authorizing, regardless of session
+- User identity should be tracked by user ID, not session
+- System should check audit trail to ensure requester ≠ authorizer
+
+**Clarification for Requirement 4 AC 9:**
+- Audit trail is maintained for VERIFIED settlements only because:
+  - PENDING/INVALID settlements cannot be approved (Requirement 4 AC 6)
+  - CANCELLED settlements are excluded from monitoring
+  - This reduces audit volume while maintaining compliance for actionable settlements
+
+### Exchange Rate Consistency
+
+**Clarification for Requirement 8 AC 4-5:**
+- Settlements use exchange rates at processing time
+- Groups may contain settlements processed at different rates
+- This is intentional - each settlement's USD equivalent is fixed at processing time
+- Group subtotals sum these fixed USD amounts
+- Rate changes only affect future settlements, not historical calculations
+
+### NET Settlement Direction Changes
+
+**Clarification for Requirement 2 AC 6:**
+- NET settlement direction changes come as new versions of the same Settlement_ID
+- The version number increments, but Settlement_ID remains constant
+- The system detects direction changes by comparing Settlement_Direction between versions
+- When direction changes, the system:
+  1. Identifies the old group (based on old direction)
+  2. Identifies the new group (based on new direction)
+  3. Recalculates both groups completely
+
+### Manual Recalculation Authorization
+
+**Clarification for Requirement 7 AC 9:**
+- Manual recalculation should require admin or supervisor-level privileges
+- The request should be logged with: user ID, timestamp, scope (PTS, Processing_Entity, Value_Date range), and reason
+- This prevents unauthorized mass status changes
+
+### Notification Retry Policy
+
+**Clarification for Requirement 7 AC 10:**
+- Retry mechanism should use exponential backoff: 1min, 2min, 4min, 8min, 16min, 32min, 64min, etc.
+- Maximum 24 hours of retry attempts
+- After 24 hours, notification is marked as failed and logged for manual intervention
+- Failed notifications should appear in admin dashboard
+
+### Filtering Rules Application
+
+**Clarification for Requirement 1 AC 19:**
+- Settlements received between rule fetches (every 5 minutes) use cached rules
+- When new rules are fetched, the system identifies affected groups
+- Affected groups are recalculated using new rules
+- This ensures consistency without requiring real-time rule fetching
+
+### Data Retention and Archiving
+
+**Clarification for Requirement 10 AC 4:**
+- Compliance period: 7 years from settlement date (as per glossary)
+- After 7 years, data can be moved to cold storage
+- Archived data must remain searchable for audit purposes
+- Archived data should be restorable within reasonable time (e.g., 24-48 hours)
+
+### User Interface Requirements
+
+**Additional Clarification:**
+- The UI should distinguish between settlement types visually:
+  - PAY settlements: Show amount, direction, and status
+  - RECEIVE settlements: Show amount but indicate "not included in exposure"
+  - NET settlements: Show direction indicator and note that direction can change
+  - CANCELLED settlements: Struck through or grayed out
+- Business Status should be clearly visible: PENDING (yellow), INVALID (orange), VERIFIED (green), CANCELLED (red)
+- Group subtotal should show: USD amount, exposure limit, and percentage of limit used
