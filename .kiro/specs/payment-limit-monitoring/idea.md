@@ -1,6 +1,8 @@
 # Receiving settlement
 ## Save settlement
-When receive a settlement, save it into `SETTLEMENT` table, with an auto-incrementing sequence ID (it will be used as `REF_ID` in the `RUNNING_TOTAL` table), the sequence ID must only increase monotonically, it means that later saved settlement must have the higher sequence ID.
+When receive a settlement, save it into `SETTLEMENT` table, with an auto-incrementing sequence ID (it will be used as `REF_ID` in the `RUNNING_TOTAL` table).
+The sequence ID must only increase monotonically, it means that later saved settlement must have the higher sequence ID. The sequence ID is NOT a version number.
+The sequence ID will be used for running total calculation, it tells to which record in the `SETTLEMENT` table, the calculation will be using. e.g. if `REF_ID` is 10, only settlements with sequence ID <= 10 will be used to calculate the running total.
 
 ## `SETTLEMENT` table
 `SETTLEMENT` table fields are: `ID`(auto-incrementing, the primary key, the `REF_ID`), `SETTLEMENT_ID`, `SETTLEMENT_VERSION`, `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE`, `CURRENCY`, `AMOUNT`, `BUSINESS_STATUS`, `DIRECTION`, `GROSS_NET`, `CREATE_TIME`.
@@ -22,9 +24,10 @@ When receive a settlement, save it into `SETTLEMENT` table, with an auto-increme
 
 ## Consume events - calculate running total - batch process
 A batch process should run periodically to calculate running totals and persist the result into `RUNNING_TOTAL` table.
+To improve performance, the calculation and persistence should be done within one SQL.
 
 ### Batch schedule / interval
-- 5 seconds after previous run
+- 5 seconds after previous run. It's not fixed schedule, it's the delay after the previous run.
 - to optimize performance, only delay when previous run processed no events (it means low traffic), if previous run processed some events, it will be immediately after the previous run, no need to delay.
 
 ### `RUNNING_TOTAL` table
@@ -35,7 +38,7 @@ Fields are: `ID`(auto-incrementing, the primary key), `PTS`, `PROCESSING_ENTITY`
 - In memory remove those duplicate/out-dated (for same `SETTLEMENT_ID` but with smaller `REF_ID`), the event list will be <= 1000
 - And then calculate running totals for each group, using the calculation algorithm below.
 - Within one transaction: save results into `RUNNING_TOTAL` table along with the `REF_ID` that is the biggest `REF_ID` within all these 1000 events, and delete the processed events from `EVENT` table.
-- The `REF_ID` is very important, because it tells the system to which record in the `SETTLEMENT` table, the calculation was using.
+- The `REF_ID` is very important, because it tells to which record in the `SETTLEMENT` table, the calculation will be using. e.g. if `REF_ID` is 10, only settlements with sequence ID <= 10 will be used to calculate the running total.
 
 ### Calculation Algorithm
 - Calculate the records in `SETTLEMENT` table by SQL, join the `EXCHANGE_RATE` table, convert settlement amount to USD and sum them
