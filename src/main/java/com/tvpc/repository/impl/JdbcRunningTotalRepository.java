@@ -47,12 +47,17 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
         // Use MERGE for Oracle (UPSERT pattern)
         // Parameters:
         // 1-6: For USING SELECT (PTS, PE, CP, VD, RUNNING_TOTAL, REF_ID)
-        // 7: For WHEN MATCHED UPDATE (UPDATE_TIME)
+        // 7: For WHEN MATCHED UPDATE (UPDATE_TIME) - only if REF_ID >= existing
         // 8-9: For WHEN NOT MATCHED INSERT (CREATE_TIME, UPDATE_TIME)
+        // Note: REF_ID check prevents stale updates from out-of-order events
+        // Oracle requires CASE in SET clause for conditional updates based on src values
         String sql = "MERGE INTO RUNNING_TOTAL rt " +
                 "USING (SELECT ? as PTS, ? as PROCESSING_ENTITY, ? as COUNTERPARTY_ID, ? as VALUE_DATE, ? as RUNNING_TOTAL, ? as REF_ID FROM DUAL) src " +
                 "ON (rt.PTS = src.PTS AND rt.PROCESSING_ENTITY = src.PROCESSING_ENTITY AND rt.COUNTERPARTY_ID = src.COUNTERPARTY_ID AND rt.VALUE_DATE = src.VALUE_DATE) " +
-                "WHEN MATCHED THEN UPDATE SET rt.RUNNING_TOTAL = src.RUNNING_TOTAL, rt.REF_ID = src.REF_ID, rt.UPDATE_TIME = ? " +
+                "WHEN MATCHED THEN UPDATE SET " +
+                "rt.RUNNING_TOTAL = CASE WHEN src.REF_ID >= rt.REF_ID THEN src.RUNNING_TOTAL ELSE rt.RUNNING_TOTAL END, " +
+                "rt.REF_ID = CASE WHEN src.REF_ID >= rt.REF_ID THEN src.REF_ID ELSE rt.REF_ID END, " +
+                "rt.UPDATE_TIME = CASE WHEN src.REF_ID >= rt.REF_ID THEN ? ELSE rt.UPDATE_TIME END " +
                 "WHEN NOT MATCHED THEN INSERT (PTS, PROCESSING_ENTITY, COUNTERPARTY_ID, VALUE_DATE, RUNNING_TOTAL, REF_ID, CREATE_TIME, UPDATE_TIME) " +
                 "VALUES (src.PTS, src.PROCESSING_ENTITY, src.COUNTERPARTY_ID, src.VALUE_DATE, src.RUNNING_TOTAL, src.REF_ID, ?, ?)";
 

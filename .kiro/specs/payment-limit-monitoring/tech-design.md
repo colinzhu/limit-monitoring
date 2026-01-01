@@ -16,11 +16,11 @@
 ## Core Concept: Sequence ID as REF_ID
 
 The system uses an **auto-incrementing sequence ID** as the foundation for consistency:
-- Every settlement saved gets a monotonically increasing sequence ID - `SEQ_ID`
+- Every settlement saved gets a monotonically increasing sequence ID - `REF_ID`
 - When creating the `SETTLEMENT` table, it should be defined as `ORDER` for the sequence ID field
 - This ID will be used in the `RUNNING_TOTAL` table
 - **Critical**: Sequence ID is NOT a version number - it only increases
-- `SEQ_ID` defines the scope: "calculate running totals using all settlements with SEQ_ID ≤ x"
+- `REF_ID` defines the scope: "calculate running totals using all settlements with REF_ID ≤ x"
 
 ---
 
@@ -28,7 +28,7 @@ The system uses an **auto-incrementing sequence ID** as the foundation for consi
 
 ### SETTLEMENT Table
 Stores the **latest version** of each settlement:
-- `SEQ_ID` - Auto-incrementing primary key (make sure the sequence is set to "ORDER" when creating the table, Specify ORDER to guarantee that sequence numbers are generated in order of request.)
+- `ID` - Auto-incrementing primary key (make sure the sequence is set to "ORDER" when creating the table, Specify ORDER to guarantee that sequence numbers are generated in order of request.)
 - `SETTLEMENT_ID` - Business settlement identifier
 - `SETTLEMENT_VERSION` - Version number (timestamp in long format)
 - `PTS` - Primary Trading System source
@@ -68,7 +68,7 @@ Stores **latest** exchange rates for currency conversion:
 ### EVENT format (no need to store in DB)
 Triggers for running total recalculation:
 - `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE` - Group identifier
-- `SEQ_ID` - `SEQ_ID` of the settlement, which triggered this event
+- `REF_ID` - `REF_ID` of the settlement, which triggered this event
 
 ### RUNNING_TOTAL Table
 Stores aggregated exposure data:
@@ -117,7 +117,7 @@ If validation fails: Reject settlement and log error for investigation.
 When a settlement arrives:
 1. Insert to `SETTLEMENT` table
 2. Get the auto-generated sequence ID
-3. This ID becomes the `SEQ_ID` for event generation
+3. This ID becomes the `REF_ID` for event generation
 **Note**: the transaction should only contains saving the settlement 
 
 ### Step 2: Mark `IS_OLD` for old versions
@@ -143,12 +143,11 @@ WHERE ID = (SELECT MAX(ID) FROM SETTLEMENT WHERE SETTLEMENT_ID = ? AND PTS = ? A
 - Immediate after the Mark Old is completed.
 
 ### Step 4: Generate Events
-- **Event format**: `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE` and `SEQ_ID` - Sequence ID of current settlement
+- **Event format**: `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE` and `REF_ID` - Sequence ID of current settlement
 - **Default**: 1 event
 - **If counterparty changed**: 2 events
   - One for old counterparty group
   - One for new counterparty group
-- Send to Vert.x event bus
 
 ### Step 5: Calculate Running Total
 Calculate the running total for the group in the event
@@ -164,9 +163,9 @@ Calculate the running total for the group in the event
   - SUM
 - **Save to Running Total**:
 ```sql
-UPDATE RUNNING_TOTAL SET RUNNING_TOTAL = ?, UPDATE_TIME = CURRENT_TIMESTAMP, SEQ_ID = ?
+UPDATE RUNNING_TOTAL SET RUNNING_TOTAL = ?, UPDATE_TIME = CURRENT_TIMESTAMP, REF_ID = ?
 WHERE PTS = ? AND PROCESSING_ENTITY = ? AND COUNTERPARTY_ID = ? AND VALUE_DATE = ?
-AND SEQ_ID <= ? -- make sure it's "<=" so that can use same ID to trigger recalculation; also used to avoid concurrent updates by another thread/instance
+AND REF_ID <= ? -- make sure it's "<=" so that can use same ID to trigger recalculation; also used to avoid concurrent updates by another thread/instance
 ``` 
 
 
@@ -230,7 +229,7 @@ WHERE ... (user criteria)
 ```
 
 For each group:
-- Generate event with `SEQ_ID` = current max ID in `SETTLEMENT` table
+- Generate event with `REF_ID` = current max ID in `SETTLEMENT` table
 - Send the event to event bus for same processing logic to re-calculate
 
 ### Requirements
