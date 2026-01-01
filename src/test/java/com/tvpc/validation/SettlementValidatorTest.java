@@ -1,5 +1,6 @@
 package com.tvpc.validation;
 
+import com.tvpc.domain.services.SettlementValidator;
 import com.tvpc.dto.SettlementRequest;
 import com.tvpc.dto.ValidationResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for SettlementValidator
+ * Updated to use domain package location
  */
 class SettlementValidatorTest {
 

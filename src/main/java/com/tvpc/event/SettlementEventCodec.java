@@ -1,5 +1,6 @@
 package com.tvpc.event;
 
+import com.tvpc.domain.SettlementEvent;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.MessageCodec;
 import io.vertx.core.json.JsonObject;
@@ -8,6 +9,7 @@ import java.time.LocalDate;
 
 /**
  * Message codec for SettlementEvent to enable event bus transmission
+ * Uses domain SettlementEvent from com.tvpc.domain package
  */
 public class SettlementEventCodec implements MessageCodec<SettlementEvent, SettlementEvent> {
 

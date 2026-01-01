@@ -1,6 +1,6 @@
 package com.tvpc;
 
-import com.tvpc.event.SettlementEvent;
+import com.tvpc.domain.SettlementEvent;
 import com.tvpc.event.SettlementEventCodec;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
@@ -11,13 +11,16 @@ import org.slf4j.LoggerFactory;
 import java.io.InputStream;
 
 /**
- * Main application entry point
+ * Main application entry point.
+ *
+ * Uses Hexagonal Architecture with Composition Root pattern.
+ * All component wiring is handled by CompositionRoot.
  */
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) {
-        log.info("Starting Payment Limit Monitoring System...");
+        log.info("Starting Payment Limit Monitoring System (Hexagonal Architecture)...");
 
         // Create Vertx instance with options
         VertxOptions options = new VertxOptions()
@@ -33,31 +36,69 @@ public class Main {
         // Load configuration from application.yml
         JsonObject config = loadConfig();
 
-        // Deploy HTTP Server Verticle
-        HttpServerVerticle httpServerVerticle = new HttpServerVerticle();
+        // Create Composition Root
+        CompositionRoot compositionRoot = new CompositionRoot(vertx, config);
 
-        vertx.deployVerticle(httpServerVerticle, new io.vertx.core.DeploymentOptions()
-                .setConfig(config)
-                .setInstances(1))
-                .onSuccess(deploymentId -> {
-                    log.info("HTTP Server Verticle deployed successfully: {}", deploymentId);
+        // Deploy HTTP Server Verticle (primary adapter)
+        deployHttpServerVerticle(vertx, compositionRoot)
+                .compose(v -> {
+                    // Deploy Event Consumer Verticle (secondary adapter)
+                    return deployEventConsumerVerticle(vertx, compositionRoot);
+                })
+                .onSuccess(v -> {
+                    // All verticles deployed successfully
+                    log.info("Payment Limit Monitoring System is ready!");
+                    log.info("API Endpoint: http://localhost:8081/api/settlements");
+                    log.info("Health Check: http://localhost:8081/health");
 
                     // Add shutdown hook
                     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                         log.info("Shutting down Payment Limit Monitoring System...");
+                        compositionRoot.close();
                         vertx.close();
                     }));
-
-                    log.info("Payment Limit Monitoring System is ready!");
-                    log.info("API Endpoint: http://localhost:8081/api/settlements");
-                    log.info("Health Check: http://localhost:8081/health");
                 })
                 .onFailure(error -> {
-                    log.error("Failed to deploy HTTP Server Verticle", error);
+                    log.error("Failed to deploy verticles", error);
+                    compositionRoot.close();
                     vertx.close();
                 });
     }
 
+    /**
+     * Deploys the HTTP Server Verticle.
+     * This is the primary entry point for all HTTP requests.
+     */
+    private static io.vertx.core.Future<Void> deployHttpServerVerticle(Vertx vertx, CompositionRoot compositionRoot) {
+        HttpServerVerticle httpServerVerticle = compositionRoot.createHttpServerVerticle();
+
+        return vertx.deployVerticle(httpServerVerticle, new io.vertx.core.DeploymentOptions()
+                .setConfig(compositionRoot.getPool() != null ? vertx.getOrCreateContext().config() : null)
+                .setInstances(1))
+                .map(deploymentId -> {
+                    log.info("HTTP Server Verticle deployed: {}", deploymentId);
+                    return null;
+                });
+    }
+
+    /**
+     * Deploys the Event Consumer Verticle.
+     * This processes settlement events asynchronously.
+     */
+    private static io.vertx.core.Future<Void> deployEventConsumerVerticle(Vertx vertx, CompositionRoot compositionRoot) {
+        var eventConsumerVerticle = compositionRoot.createEventConsumerVerticle();
+
+        return vertx.deployVerticle(eventConsumerVerticle, new io.vertx.core.DeploymentOptions()
+                .setInstances(1))
+                .map(deploymentId -> {
+                    log.info("Event Consumer Verticle deployed: {}", deploymentId);
+                    return null;
+                });
+    }
+
+    /**
+     * Load configuration from application.yml or use defaults.
+     */
     private static JsonObject loadConfig() {
         try (InputStream is = Main.class.getClassLoader().getResourceAsStream("application.yml")) {
             if (is == null) {
@@ -69,7 +110,6 @@ public class Main {
             String yaml = new String(is.readAllBytes());
 
             // Simple YAML parsing for our config structure
-            // This is a basic parser - for production use a proper YAML library
             JsonObject config = new JsonObject();
 
             // Parse HTTP config
@@ -104,6 +144,9 @@ public class Main {
         }
     }
 
+    /**
+     * Default Oracle configuration (used when application.yml is not found).
+     */
     private static JsonObject getDefaultOracleConfig() {
         return new JsonObject()
                 .put("http.port", 8081)
