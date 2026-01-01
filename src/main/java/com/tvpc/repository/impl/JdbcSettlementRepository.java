@@ -213,17 +213,19 @@ public class JdbcSettlementRepository implements SettlementRepository {
     public Future<List<Settlement>> findByGroupWithFilters(String pts, String processingEntity, String counterpartyId, String valueDate, Long maxSeqId, SqlConnection connection) {
         Promise<List<Settlement>> promise = Promise.promise();
 
-        // Use window function to find latest version per settlement ID, without relying on IS_OLD flag
-        // This correctly handles counterparty changes where old versions may have IS_OLD=1
-        String sql = "SELECT * FROM (" +
-                "  SELECT s.*, " +
-                "         MAX(s.SETTLEMENT_VERSION) OVER (PARTITION BY s.SETTLEMENT_ID, s.PTS, s.PROCESSING_ENTITY) as max_version " +
-                "  FROM SETTLEMENT s " +
-                "  WHERE s.PTS = ? AND s.PROCESSING_ENTITY = ? AND s.COUNTERPARTY_ID = ? AND s.VALUE_DATE = ? " +
-                "    AND s.ID <= ? " +
-                "    AND s.DIRECTION = 'PAY' AND s.BUSINESS_STATUS != 'CANCELLED' " +
-                ") ranked " +
-                "WHERE SETTLEMENT_VERSION = max_version " +
+        // Use correlated subquery to find latest version per settlement ID across all counterparties
+        // This correctly handles counterparty changes without relying on IS_OLD flag
+        String sql = "SELECT s.* FROM SETTLEMENT s " +
+                "WHERE s.PTS = ? AND s.PROCESSING_ENTITY = ? AND s.COUNTERPARTY_ID = ? AND s.VALUE_DATE = ? " +
+                "  AND s.ID <= ? " +
+                "  AND s.DIRECTION = 'PAY' AND s.BUSINESS_STATUS != 'CANCELLED' " +
+                "  AND s.SETTLEMENT_VERSION = (" +
+                "    SELECT MAX(SETTLEMENT_VERSION) " +
+                "    FROM SETTLEMENT " +
+                "    WHERE SETTLEMENT_ID = s.SETTLEMENT_ID " +
+                "      AND PTS = s.PTS " +
+                "      AND PROCESSING_ENTITY = s.PROCESSING_ENTITY " +
+                "  ) " +
                 "ORDER BY SETTLEMENT_ID";
 
         Tuple params = Tuple.of(pts, processingEntity, counterpartyId, LocalDate.parse(valueDate), maxSeqId);
