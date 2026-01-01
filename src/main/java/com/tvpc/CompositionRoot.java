@@ -120,9 +120,17 @@ public class CompositionRoot {
      * Creates a fully wired router (useful for testing or direct use).
      */
     public SettlementRouter createSettlementRouter() {
+        if (pool == null) {
+            initializeInfrastructure();
+        }
+
+        JdbcTransactionManager transactionManager = new JdbcTransactionManager(pool);
+        SettlementRepositoryPort settlementRepository = new JdbcSettlementRepository(transactionManager);
+        ExchangeRateRepositoryPort exchangeRateRepository = new JdbcExchangeRateRepository(transactionManager);
+
         SettlementIngestionHandler handler = createSettlementIngestionHandler();
         Router router = Router.router(vertx);
-        return new SettlementRouter(router, handler);
+        return new SettlementRouter(router, handler, settlementRepository, exchangeRateRepository);
     }
 
     // ==================== Internal Wiring Methods ====================
@@ -206,7 +214,7 @@ public class CompositionRoot {
 
         // Interface Layer
         SettlementIngestionHandler handler = new SettlementIngestionHandler(ingestionService);
-        SettlementRouter router = new SettlementRouter(Router.router(vertx), handler);
+        SettlementRouter router = new SettlementRouter(Router.router(vertx), handler, settlementRepository, exchangeRateRepository);
 
         log.info("All components wired successfully");
     }
@@ -241,6 +249,13 @@ public class CompositionRoot {
      */
     public JDBCPool getPool() {
         return pool;
+    }
+
+    /**
+     * Get the configuration.
+     */
+    public JsonObject getConfig() {
+        return config;
     }
 
     /**

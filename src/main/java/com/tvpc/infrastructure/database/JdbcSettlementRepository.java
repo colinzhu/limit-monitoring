@@ -32,37 +32,43 @@ public class JdbcSettlementRepository implements SettlementRepositoryPort {
         return transactionManager.executeInTransaction(connection -> {
             Promise<Long> promise = Promise.promise();
 
-            String sql = "INSERT INTO SETTLEMENT (" +
-                    "SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
-                    "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
-                    "BUSINESS_STATUS, DIRECTION, SETTLEMENT_TYPE, IS_OLD" +
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-                    "RETURNING ID";
-
-            connection.preparedQuery(sql)
-                    .execute(Tuple.of(
-                            settlement.getSettlementId(),
-                            settlement.getSettlementVersion(),
-                            settlement.getPts(),
-                            settlement.getProcessingEntity(),
-                            settlement.getCounterpartyId(),
-                            settlement.getValueDate(),
-                            settlement.getCurrency(),
-                            settlement.getAmount(),
-                            settlement.getBusinessStatus().name(),
-                            settlement.getDirection().name(),
-                            settlement.getSettlementType().name(),
-                            false
-                    ))
-                    .onSuccess(result -> {
-                        // Get the auto-generated ID from RETURNING clause
-                        if (result.size() > 0) {
-                            Long seqId = result.iterator().next().getLong("ID");
-                            promise.complete(seqId);
-                        } else {
-                            promise.fail("Failed to retrieve generated ID");
+            // First, get the next sequence value
+            connection.query("SELECT SETTLEMENT_SEQ.NEXTVAL AS ID FROM DUAL").execute()
+                    .compose(result -> {
+                        if (result.size() == 0) {
+                            promise.fail("No sequence value returned");
+                            return Future.failedFuture("No sequence value");
                         }
+
+                        Long id = result.iterator().next().getLong("ID");
+
+                        // Now insert with the explicit ID
+                        String sql = "INSERT INTO SETTLEMENT (" +
+                                "ID, SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
+                                "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
+                                "BUSINESS_STATUS, DIRECTION, GROSS_NET, IS_OLD, " +
+                                "CREATE_TIME, UPDATE_TIME" +
+                                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)";
+
+                        return connection.preparedQuery(sql)
+                                .execute(Tuple.of(
+                                        id,
+                                        settlement.getSettlementId(),
+                                        settlement.getSettlementVersion(),
+                                        settlement.getPts(),
+                                        settlement.getProcessingEntity(),
+                                        settlement.getCounterpartyId(),
+                                        settlement.getValueDate(),
+                                        settlement.getCurrency(),
+                                        settlement.getAmount(),
+                                        settlement.getBusinessStatus().name(),
+                                        settlement.getDirection().name(),
+                                        settlement.getSettlementType().name(),
+                                        0  // IS_OLD = 0 (false)
+                                ))
+                                .map(id);
                     })
+                    .onSuccess(promise::complete)
                     .onFailure(promise::fail);
 
             return promise.future();
@@ -74,9 +80,9 @@ public class JdbcSettlementRepository implements SettlementRepositoryPort {
         return transactionManager.executeInTransaction(connection -> {
             Promise<Void> promise = Promise.promise();
 
-            String sql = "UPDATE SETTLEMENT SET IS_OLD = true " +
+            String sql = "UPDATE SETTLEMENT SET IS_OLD = 1 " +
                     "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? " +
-                    "AND IS_OLD = false";
+                    "AND IS_OLD = 0";
 
             connection.preparedQuery(sql)
                     .execute(Tuple.of(settlementId, pts, processingEntity))
@@ -182,10 +188,18 @@ public class JdbcSettlementRepository implements SettlementRepositoryPort {
                 row.getBigDecimal("AMOUNT"),
                 com.tvpc.domain.BusinessStatus.valueOf(row.getString("BUSINESS_STATUS")),
                 com.tvpc.domain.SettlementDirection.valueOf(row.getString("DIRECTION")),
-                com.tvpc.domain.SettlementType.valueOf(row.getString("SETTLEMENT_TYPE"))
+                com.tvpc.domain.SettlementType.valueOf(row.getString("GROSS_NET"))
         );
         settlement.setId(row.getLong("ID"));
-        settlement.setIsOld(row.getBoolean("IS_OLD"));
+        // Oracle returns NUMBER(1) as Integer, need to convert to boolean
+        Object isOldValue = row.getValue("IS_OLD");
+        boolean isOld = false;
+        if (isOldValue instanceof Number) {
+            isOld = ((Number) isOldValue).intValue() == 1;
+        } else if (isOldValue instanceof Boolean) {
+            isOld = (Boolean) isOldValue;
+        }
+        settlement.setIsOld(isOld);
         return settlement;
     }
 }

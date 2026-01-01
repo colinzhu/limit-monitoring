@@ -36,7 +36,7 @@ public class JdbcRunningTotalRepository implements RunningTotalRepositoryPort {
                     "              ? as VALUE_DATE, ? as RUNNING_TOTAL, ? as REF_ID FROM DUAL) src " +
                     "ON (rt.PTS = src.PTS AND rt.PROCESSING_ENTITY = src.PROCESSING_ENTITY " +
                     "    AND rt.COUNTERPARTY_ID = src.COUNTERPARTY_ID AND rt.VALUE_DATE = src.VALUE_DATE) " +
-                    "WHEN MATCHED THEN UPDATE SET rt.RUNNING_TOTAL = src.RUNNING_TOTAL, rt.REF_ID = src.REF_ID, rt.LAST_UPDATED = SYSTIMESTAMP " +
+                    "WHEN MATCHED THEN UPDATE SET rt.RUNNING_TOTAL = src.RUNNING_TOTAL, rt.REF_ID = src.REF_ID, rt.UPDATE_TIME = SYSTIMESTAMP " +
                     "WHEN NOT MATCHED THEN INSERT (PTS, PROCESSING_ENTITY, COUNTERPARTY_ID, VALUE_DATE, RUNNING_TOTAL, REF_ID) " +
                     "VALUES (src.PTS, src.PROCESSING_ENTITY, src.COUNTERPARTY_ID, src.VALUE_DATE, src.RUNNING_TOTAL, src.REF_ID)";
 

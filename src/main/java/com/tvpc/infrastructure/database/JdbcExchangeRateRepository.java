@@ -77,7 +77,7 @@ public class JdbcExchangeRateRepository implements ExchangeRateRepositoryPort {
             String sql = "MERGE INTO EXCHANGE_RATE er " +
                     "USING (SELECT ? as CURRENCY, ? as RATE_TO_USD FROM DUAL) src " +
                     "ON (er.CURRENCY = src.CURRENCY) " +
-                    "WHEN MATCHED THEN UPDATE SET er.RATE_TO_USD = src.RATE_TO_USD, er.LAST_UPDATED = SYSTIMESTAMP " +
+                    "WHEN MATCHED THEN UPDATE SET er.RATE_TO_USD = src.RATE_TO_USD, er.UPDATE_TIME = SYSTIMESTAMP " +
                     "WHEN NOT MATCHED THEN INSERT (CURRENCY, RATE_TO_USD) VALUES (src.CURRENCY, src.RATE_TO_USD)";
 
             connection.preparedQuery(sql)
@@ -97,7 +97,7 @@ public class JdbcExchangeRateRepository implements ExchangeRateRepositoryPort {
             // Check if any rates are older than 5 minutes (configurable)
             // For MVP, we'll return false (not stale) since rates are manually updated
             String sql = "SELECT COUNT(*) as count FROM EXCHANGE_RATE " +
-                    "WHERE LAST_UPDATED < (SYSTIMESTAMP - INTERVAL '5' MINUTE)";
+                    "WHERE UPDATE_TIME < (SYSTIMESTAMP - INTERVAL '5' MINUTE)";
 
             connection.preparedQuery(sql)
                     .execute()

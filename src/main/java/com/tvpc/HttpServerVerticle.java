@@ -165,7 +165,9 @@ public class HttpServerVerticle extends AbstractVerticle {
             // Router
             settlementRouter = new SettlementRouter(
                     Router.router(vertx),
-                    ingestionHandler
+                    ingestionHandler,
+                    settlementRepository,
+                    exchangeRateRepository
             );
 
             log.info("Application wiring completed successfully");

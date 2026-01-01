@@ -72,8 +72,11 @@ public class Main {
     private static io.vertx.core.Future<Void> deployHttpServerVerticle(Vertx vertx, CompositionRoot compositionRoot) {
         HttpServerVerticle httpServerVerticle = compositionRoot.createHttpServerVerticle();
 
+        // Pass the loaded config to the verticle
+        JsonObject config = compositionRoot.getConfig();
+
         return vertx.deployVerticle(httpServerVerticle, new io.vertx.core.DeploymentOptions()
-                .setConfig(compositionRoot.getPool() != null ? vertx.getOrCreateContext().config() : null)
+                .setConfig(config)
                 .setInstances(1))
                 .map(deploymentId -> {
                     log.info("HTTP Server Verticle deployed: {}", deploymentId);
