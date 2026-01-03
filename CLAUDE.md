@@ -393,3 +393,6 @@ curl http://localhost:8081/health
 ## Tools for claude to use
 - **WebFetch**: this tool always has error, so use curl instead
 - **WebSearch**: this tool always return nothing, so use chrome-devtool-mcp to search in cn.bing.com instead
+
+## Stop the app
+- when the app is started, it put the PID into app.pid file, can kill the app by using the pid

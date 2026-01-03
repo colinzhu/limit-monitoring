@@ -32,22 +32,17 @@ public class JdbcSettlementRepository implements SettlementRepository {
     public Future<Long> save(Settlement settlement, SqlConnection connection) {
         Promise<Long> promise = Promise.promise();
 
-        // For Oracle with GENERATED ALWAYS AS IDENTITY, use RETURNING clause
-        // The RETURNING clause returns the generated ID directly
-        // Note: Vert.x JDBC client handles RETURNING clause differently than plain SQL
-        String sql = "INSERT INTO SETTLEMENT (" +
+        // Oracle-compatible approach: Two-step process
+        // Step 1: Execute INSERT
+        // Step 2: Query for the generated ID
+        String insertSql = "INSERT INTO SETTLEMENT (" +
                 "SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
                 "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
                 "BUSINESS_STATUS, DIRECTION, GROSS_NET, IS_OLD, " +
                 "CREATE_TIME, UPDATE_TIME" +
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-                "RETURNING ID INTO ?";
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-        // For RETURNING clause, we need to pass a bind variable for the output
-        // However, Vert.x SqlClient doesn't support OUT parameters directly
-        // So we'll use a different approach: execute the insert and then query for the ID
-
-        Tuple params = Tuple.of(
+        Tuple insertParams = Tuple.of(
                 settlement.getSettlementId(),
                 settlement.getSettlementVersion(),
                 settlement.getPts(),
@@ -64,23 +59,10 @@ public class JdbcSettlementRepository implements SettlementRepository {
                 LocalDateTime.now()
         );
 
-        // First, try to insert and get the ID using RETURNING
-        // Since Vert.x doesn't directly support RETURNING INTO with bind variables,
-        // we'll use a two-step approach for Oracle compatibility
-
-        // Step 1: Execute the insert
-        String insertSql = "INSERT INTO SETTLEMENT (" +
-                "SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
-                "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
-                "BUSINESS_STATUS, DIRECTION, GROSS_NET, IS_OLD, " +
-                "CREATE_TIME, UPDATE_TIME" +
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
         connection.preparedQuery(insertSql)
-                .execute(params)
+                .execute(insertParams)
                 .compose(result -> {
-                    // After successful insert, query for the generated ID
-                    // Use the unique constraint fields to find the newly inserted record
+                    // Get the generated ID using a separate query
                     String selectSql = "SELECT ID FROM SETTLEMENT " +
                             "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? AND SETTLEMENT_VERSION = ? " +
                             "ORDER BY ID DESC FETCH FIRST 1 ROW ONLY";
@@ -97,9 +79,8 @@ public class JdbcSettlementRepository implements SettlementRepository {
                 .map(result -> {
                     if (result.size() > 0) {
                         return result.iterator().next().getLong("ID");
-                    } else {
-                        throw new RuntimeException("Failed to retrieve generated ID after insert");
                     }
+                    throw new RuntimeException("Failed to retrieve generated ID after insert");
                 })
                 .compose(id -> {
                     settlement.setId(id);
