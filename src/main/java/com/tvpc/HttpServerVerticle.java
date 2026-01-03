@@ -30,7 +30,7 @@ public class HttpServerVerticle extends AbstractVerticle {
 
     private static final int DEFAULT_PORT = 8080;
 
-    private SqlClient sqlClient;
+    private JDBCPool jdbcPool;
     private SettlementIngestionService ingestionService;
     private SettlementIngestionHandler ingestionHandler;
 
@@ -59,8 +59,8 @@ public class HttpServerVerticle extends AbstractVerticle {
 
     @Override
     public void stop() {
-        if (sqlClient != null) {
-            sqlClient.close();
+        if (jdbcPool != null) {
+            jdbcPool.close();
         }
         log.info("HTTP Server Verticle stopped");
     }
@@ -83,10 +83,10 @@ public class HttpServerVerticle extends AbstractVerticle {
                     .put("driver_class", dbConfig.getString("driver_class"))
                     .put("max_pool_size", dbConfig.getInteger("max_pool_size", 10));
 
-            sqlClient = io.vertx.jdbcclient.JDBCPool.pool(vertx, poolConfig);
+            jdbcPool = io.vertx.jdbcclient.JDBCPool.pool(vertx, poolConfig);
 
             // Test connection (schema already created in Oracle)
-            return sqlClient.query("SELECT 1 FROM DUAL").execute()
+            return jdbcPool.query("SELECT 1 FROM DUAL").execute()
                     .onSuccess(result -> log.info("Database connection test successful"))
                     .onFailure(error -> log.error("Database connection failed", error))
                     .mapEmpty();
@@ -99,10 +99,10 @@ public class HttpServerVerticle extends AbstractVerticle {
 
     private void initializeServices() {
         // Repositories
-        SettlementRepository settlementRepository = new JdbcSettlementRepository(sqlClient);
-        RunningTotalRepository runningTotalRepository = new JdbcRunningTotalRepository(sqlClient);
-        ExchangeRateRepository exchangeRateRepository = new JdbcExchangeRateRepository(sqlClient);
-        ActivityRepository activityRepository = new JdbcActivityRepository(sqlClient);
+        SettlementRepository settlementRepository = new JdbcSettlementRepository(jdbcPool);
+        RunningTotalRepository runningTotalRepository = new JdbcRunningTotalRepository(jdbcPool);
+        ExchangeRateRepository exchangeRateRepository = new JdbcExchangeRateRepository(jdbcPool);
+        ActivityRepository activityRepository = new JdbcActivityRepository(jdbcPool);
 
         // Event publisher
         EventPublisher eventPublisher = new EventPublisher(vertx);
@@ -119,7 +119,7 @@ public class HttpServerVerticle extends AbstractVerticle {
                 settlementRepository,
                 runningTotalRepository,
                 activityRepository,
-                sqlClient,
+                jdbcPool,
                 configurationService
         );
 

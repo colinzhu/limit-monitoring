@@ -12,7 +12,7 @@ import com.tvpc.repository.RunningTotalRepository;
 import com.tvpc.repository.ActivityRepository;
 import com.tvpc.validation.SettlementValidator;
 import io.vertx.core.Future;
-import io.vertx.sqlclient.SqlClient;
+import io.vertx.jdbcclient.JDBCPool;
 import io.vertx.sqlclient.SqlConnection;
 import lombok.Value;
 import org.slf4j.Logger;
@@ -33,7 +33,7 @@ public class SettlementIngestionService {
     private final SettlementRepository settlementRepository;
     private final RunningTotalRepository runningTotalRepository;
     private final ActivityRepository activityRepository;
-    private final SqlClient sqlClient;
+    private final JDBCPool jdbcPool;
     private final ConfigurationService configurationService;
 
     public SettlementIngestionService(
@@ -41,14 +41,14 @@ public class SettlementIngestionService {
             SettlementRepository settlementRepository,
             RunningTotalRepository runningTotalRepository,
             ActivityRepository activityRepository,
-            SqlClient sqlClient,
+            JDBCPool jdbcPool,
             ConfigurationService configurationService
     ) {
         this.validator = validator;
         this.settlementRepository = settlementRepository;
         this.runningTotalRepository = runningTotalRepository;
         this.activityRepository = activityRepository;
-        this.sqlClient = sqlClient;
+        this.jdbcPool = jdbcPool;
         this.configurationService = configurationService;
     }
 
@@ -69,32 +69,7 @@ public class SettlementIngestionService {
         // Convert to domain object
         Settlement settlement = convertToDomain(request);
 
-        // Get database connection and execute all steps in a transaction
-        // Note: sqlClient needs to be JDBCPool for getConnection() to work
-        if (!(sqlClient instanceof io.vertx.jdbcclient.JDBCPool)) {
-            return Future.failedFuture("SqlClient must be JDBCPool instance for transaction support");
-        }
-
-        io.vertx.jdbcclient.JDBCPool pool = (io.vertx.jdbcclient.JDBCPool) sqlClient;
-
-        return pool.getConnection()
-                .compose(connection -> {
-                    // Begin transaction
-                    return connection.begin()
-                            .compose(tx -> {
-                                // Execute all 5 steps in sequence
-                                return executeIngestionSteps(connection, settlement)
-                                        .compose(seqId -> {
-                                            // Commit transaction
-                                            return tx.commit().map(seqId);
-                                        })
-                                        .onFailure(throwable -> {
-                                            // Rollback on any failure
-                                            log.error("Transaction failed, rolling back: {}", throwable.getMessage());
-                                            tx.rollback();
-                                        });
-                            });
-                });
+        return jdbcPool.withTransaction(connection -> executeIngestionSteps(connection, settlement));
     }
 
     /**
