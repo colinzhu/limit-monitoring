@@ -6,7 +6,6 @@ import com.tvpc.domain.SettlementDirection;
 import com.tvpc.domain.SettlementType;
 import com.tvpc.repository.SettlementRepository;
 import io.vertx.core.Future;
-import io.vertx.core.Promise;
 import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.SqlConnection;
 import io.vertx.sqlclient.Tuple;
@@ -32,8 +31,6 @@ public class JdbcSettlementRepository implements SettlementRepository {
 
     @Override
     public Future<Long> save(Settlement settlement, SqlConnection connection) {
-        Promise<Long> promise = Promise.promise();
-
         // Oracle-compatible approach: Two-step process
         // Step 1: Execute INSERT
         // Step 2: Query for the generated ID
@@ -61,7 +58,7 @@ public class JdbcSettlementRepository implements SettlementRepository {
                 LocalDateTime.now()
         );
 
-        connection.preparedQuery(insertSql)
+        return connection.preparedQuery(insertSql)
                 .execute(insertParams)
                 .compose(result -> {
                     // Get the generated ID using a separate query
@@ -114,44 +111,31 @@ public class JdbcSettlementRepository implements SettlementRepository {
                     }
                     // Re-throw if it's not a duplicate error
                     return Future.failedFuture(throwable);
-                })
-                .onSuccess(promise::complete)
-                .onFailure(promise::fail);
-
-        return promise.future();
+                });
     }
 
     /**
      * Find the ID of an existing settlement with the same unique key
      */
     private Future<Long> findExistingSettlementId(String settlementId, String pts, String processingEntity, Long settlementVersion, SqlConnection connection) {
-        Promise<Long> promise = Promise.promise();
-
         String sql = "SELECT ID FROM SETTLEMENT " +
                 "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? AND SETTLEMENT_VERSION = ?";
 
         Tuple params = Tuple.of(settlementId, pts, processingEntity, settlementVersion);
 
-        connection.preparedQuery(sql)
+        return connection.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     if (result.size() > 0) {
-                        Long id = result.iterator().next().getLong("ID");
-                        promise.complete(id);
-                    } else {
-                        // This shouldn't happen if we caught a duplicate constraint violation
-                        promise.fail("Duplicate detected but no existing record found");
+                        return result.iterator().next().getLong("ID");
                     }
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    // This shouldn't happen if we caught a duplicate constraint violation
+                    throw new RuntimeException("Duplicate detected but no existing record found");
+                });
     }
 
     @Override
     public Future<Void> markOldVersions(String settlementId, String pts, String processingEntity, SqlConnection connection) {
-        Promise<Void> promise = Promise.promise();
-
         // Oracle-compatible: Use 1 for TRUE
         String sql = "UPDATE SETTLEMENT SET IS_OLD = 1, UPDATE_TIME = ? " +
                 "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? " +
@@ -169,18 +153,13 @@ public class JdbcSettlementRepository implements SettlementRepository {
                 processingEntity
         );
 
-        connection.preparedQuery(sql)
+        return connection.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> promise.complete())
-                .onFailure(promise::fail);
-
-        return promise.future();
+                .mapEmpty();
     }
 
     @Override
     public Future<Optional<String>> findPreviousCounterparty(String settlementId, String pts, String processingEntity, Long currentId, SqlConnection connection) {
-        Promise<Optional<String>> promise = Promise.promise();
-
         String sql = "SELECT COUNTERPARTY_ID FROM SETTLEMENT " +
                 "WHERE ID = (SELECT MAX(ID) FROM SETTLEMENT " +
                 "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? AND ID < ?) " +
@@ -188,25 +167,19 @@ public class JdbcSettlementRepository implements SettlementRepository {
 
         Tuple params = Tuple.of(settlementId, pts, processingEntity, currentId);
 
-        connection.preparedQuery(sql)
+        return connection.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     if (result.size() > 0) {
                         String counterpartyId = result.iterator().next().getString("COUNTERPARTY_ID");
-                        promise.complete(Optional.of(counterpartyId));
-                    } else {
-                        promise.complete(Optional.empty());
+                        return Optional.of(counterpartyId);
                     }
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return Optional.empty();
+                });
     }
 
     @Override
     public Future<Optional<Settlement>> findLatestVersion(String settlementId, String pts, String processingEntity) {
-        Promise<Optional<Settlement>> promise = Promise.promise();
-
         // Oracle-compatible: Use FETCH FIRST instead of LIMIT
         String sql = "SELECT * FROM SETTLEMENT " +
                 "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? " +
@@ -215,24 +188,18 @@ public class JdbcSettlementRepository implements SettlementRepository {
 
         Tuple params = Tuple.of(settlementId, pts, processingEntity);
 
-        sqlClient.preparedQuery(sql)
+        return sqlClient.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     if (result.size() > 0) {
-                        promise.complete(Optional.of(mapToSettlement(result.iterator().next())));
-                    } else {
-                        promise.complete(Optional.empty());
+                        return Optional.of(mapToSettlement(result.iterator().next()));
                     }
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return Optional.empty();
+                });
     }
 
     @Override
     public Future<List<Settlement>> findByGroup(String pts, String processingEntity, String counterpartyId, String valueDate, Long maxSeqId, SqlConnection connection) {
-        Promise<List<Settlement>> promise = Promise.promise();
-
         String sql = "SELECT * FROM SETTLEMENT " +
                 "WHERE PTS = ? AND PROCESSING_ENTITY = ? AND COUNTERPARTY_ID = ? AND VALUE_DATE = ? " +
                 "AND ID <= ? " +
@@ -240,24 +207,19 @@ public class JdbcSettlementRepository implements SettlementRepository {
 
         Tuple params = Tuple.of(pts, processingEntity, counterpartyId, LocalDate.parse(valueDate), maxSeqId);
 
-        connection.preparedQuery(sql)
+        return connection.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     List<Settlement> settlements = new ArrayList<>();
                     for (var row : result) {
                         settlements.add(mapToSettlement(row));
                     }
-                    promise.complete(settlements);
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return settlements;
+                });
     }
 
     @Override
     public Future<List<Settlement>> findByGroupWithFilters(String pts, String processingEntity, String counterpartyId, String valueDate, Long maxSeqId, SqlConnection connection) {
-        Promise<List<Settlement>> promise = Promise.promise();
-
         // Use correlated subquery to find latest version per settlement ID across all counterparties
         // This correctly handles counterparty changes without relying on IS_OLD flag
         String sql = "SELECT s.* FROM SETTLEMENT s " +
@@ -275,18 +237,15 @@ public class JdbcSettlementRepository implements SettlementRepository {
 
         Tuple params = Tuple.of(pts, processingEntity, counterpartyId, LocalDate.parse(valueDate), maxSeqId);
 
-        connection.preparedQuery(sql)
+        return connection.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     List<Settlement> settlements = new ArrayList<>();
                     for (var row : result) {
                         settlements.add(mapToSettlement(row));
                     }
-                    promise.complete(settlements);
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return settlements;
+                });
     }
 
     private Settlement mapToSettlement(io.vertx.sqlclient.Row row) {

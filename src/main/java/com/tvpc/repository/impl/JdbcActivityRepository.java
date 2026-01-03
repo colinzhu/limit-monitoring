@@ -2,7 +2,6 @@ package com.tvpc.repository.impl;
 
 import com.tvpc.repository.ActivityRepository;
 import io.vertx.core.Future;
-import io.vertx.core.Promise;
 import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.Tuple;
 
@@ -30,8 +29,6 @@ public class JdbcActivityRepository implements ActivityRepository {
             String actionType,
             String actionComment
     ) {
-        Promise<Void> promise = Promise.promise();
-
         String sql = "INSERT INTO ACTIVITIES " +
                 "(PTS, PROCESSING_ENTITY, SETTLEMENT_ID, SETTLEMENT_VERSION, USER_ID, USER_NAME, ACTION_TYPE, ACTION_COMMENT, CREATE_TIME) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -48,58 +45,43 @@ public class JdbcActivityRepository implements ActivityRepository {
                 LocalDateTime.now()
         );
 
-        sqlClient.preparedQuery(sql)
+        return sqlClient.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> promise.complete())
-                .onFailure(promise::fail);
-
-        return promise.future();
+                .mapEmpty();
     }
 
     @Override
     public Future<Boolean> hasUserRequested(String settlementId, Long settlementVersion, String userId) {
-        Promise<Boolean> promise = Promise.promise();
-
         String sql = "SELECT COUNT(*) as count FROM ACTIVITIES " +
                 "WHERE SETTLEMENT_ID = ? AND SETTLEMENT_VERSION = ? AND USER_ID = ? AND ACTION_TYPE = 'REQUEST_RELEASE'";
 
         Tuple params = Tuple.of(settlementId, settlementVersion, userId);
 
-        sqlClient.preparedQuery(sql)
+        return sqlClient.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     long count = result.iterator().next().getLong("count");
-                    promise.complete(count > 0);
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return count > 0;
+                });
     }
 
     @Override
     public Future<Boolean> isAuthorized(String settlementId, Long settlementVersion) {
-        Promise<Boolean> promise = Promise.promise();
-
         String sql = "SELECT COUNT(*) as count FROM ACTIVITIES " +
                 "WHERE SETTLEMENT_ID = ? AND SETTLEMENT_VERSION = ? AND ACTION_TYPE = 'AUTHORISE'";
 
         Tuple params = Tuple.of(settlementId, settlementVersion);
 
-        sqlClient.preparedQuery(sql)
+        return sqlClient.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     long count = result.iterator().next().getLong("count");
-                    promise.complete(count > 0);
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return count > 0;
+                });
     }
 
     @Override
     public Future<WorkflowInfo> getWorkflowInfo(String settlementId, Long settlementVersion) {
-        Promise<WorkflowInfo> promise = Promise.promise();
-
         String sql = "SELECT " +
                 "MAX(CASE WHEN ACTION_TYPE = 'REQUEST_RELEASE' THEN USER_ID END) as requester_id, " +
                 "MAX(CASE WHEN ACTION_TYPE = 'REQUEST_RELEASE' THEN USER_NAME END) as requester_name, " +
@@ -113,12 +95,12 @@ public class JdbcActivityRepository implements ActivityRepository {
 
         Tuple params = Tuple.of(settlementId, settlementVersion);
 
-        sqlClient.preparedQuery(sql)
+        return sqlClient.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     if (result.size() > 0) {
                         var row = result.iterator().next();
-                        WorkflowInfo info = new WorkflowInfo(
+                        return new WorkflowInfo(
                                 row.getString("requester_id"),
                                 row.getString("requester_name"),
                                 row.getLocalDateTime("request_time"),
@@ -126,13 +108,8 @@ public class JdbcActivityRepository implements ActivityRepository {
                                 row.getString("authorizer_name"),
                                 row.getLocalDateTime("authorize_time")
                         );
-                        promise.complete(info);
-                    } else {
-                        promise.complete(null);
                     }
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return null;
+                });
     }
 }

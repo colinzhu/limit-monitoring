@@ -2,7 +2,6 @@ package com.tvpc.repository.impl;
 
 import com.tvpc.repository.RunningTotalRepository;
 import io.vertx.core.Future;
-import io.vertx.core.Promise;
 import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.SqlConnection;
 import io.vertx.sqlclient.Tuple;
@@ -34,8 +33,6 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
             Long refId,
             SqlConnection connection
     ) {
-        Promise<Void> promise = Promise.promise();
-
         LocalDateTime now = LocalDateTime.now();
 
         // Log the parameters for debugging
@@ -74,18 +71,11 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
         log.debug("SQL: {}", sql);
         log.debug("params: {}", params);
 
-        connection.preparedQuery(sql)
+        return connection.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
-                    log.debug("updateRunningTotal succeeded");
-                    promise.complete();
-                })
-                .onFailure(error -> {
-                    log.error("updateRunningTotal failed: {}", error.getMessage(), error);
-                    promise.fail(error);
-                });
-
-        return promise.future();
+                .onSuccess(result -> log.debug("updateRunningTotal succeeded"))
+                .onFailure(error -> log.error("updateRunningTotal failed: {}", error.getMessage(), error))
+                .mapEmpty();
     }
 
     @Override
@@ -95,29 +85,23 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
             String counterpartyId,
             LocalDate valueDate
     ) {
-        Promise<java.util.Optional<RunningTotalRepository.RunningTotal>> promise = Promise.promise();
-
         String sql = "SELECT RUNNING_TOTAL, REF_ID FROM RUNNING_TOTAL " +
                 "WHERE PTS = ? AND PROCESSING_ENTITY = ? AND COUNTERPARTY_ID = ? AND VALUE_DATE = ?";
 
         Tuple params = Tuple.of(pts, processingEntity, counterpartyId, valueDate);
 
-        sqlClient.preparedQuery(sql)
+        return sqlClient.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
+                .map(result -> {
                     if (result.size() > 0) {
                         var row = result.iterator().next();
                         RunningTotalRepository.RunningTotal runningTotal = new RunningTotalRepository.RunningTotal(
                                 row.getBigDecimal("RUNNING_TOTAL"), row.getLong("REF_ID")
                         );
-                        promise.complete(java.util.Optional.of(runningTotal));
-                    } else {
-                        promise.complete(java.util.Optional.empty());
+                        return java.util.Optional.of(runningTotal);
                     }
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                    return java.util.Optional.empty();
+                });
     }
 
     @Override
@@ -129,8 +113,6 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
             Long maxSeqId,
             SqlConnection connection
     ) {
-        Promise<Void> promise = Promise.promise();
-
         // Log the parameters for debugging
         log.debug("calculateAndSaveRunningTotal: pts={}, pe={}, cp={}, vd={}, maxSeqId={}",
                 pts, processingEntity, counterpartyId, valueDate, maxSeqId);
@@ -192,17 +174,10 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
         log.debug("SQL: {}", sql);
         log.debug("params: {}", params);
 
-        connection.preparedQuery(sql)
+        return connection.preparedQuery(sql)
                 .execute(params)
-                .onSuccess(result -> {
-                    log.debug("calculateAndSaveRunningTotal succeeded");
-                    promise.complete();
-                })
-                .onFailure(error -> {
-                    log.error("calculateAndSaveRunningTotal failed: {}", error.getMessage(), error);
-                    promise.fail(error);
-                });
-
-        return promise.future();
+                .onSuccess(result -> log.debug("calculateAndSaveRunningTotal succeeded"))
+                .onFailure(error -> log.error("calculateAndSaveRunningTotal failed: {}", error.getMessage(), error))
+                .mapEmpty();
     }
 }

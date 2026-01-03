@@ -66,14 +66,11 @@ public class HttpServerVerticle extends AbstractVerticle {
     }
 
     private Future<Void> initializeDatabase() {
-        Promise<Void> promise = Promise.promise();
-
         try {
             // Get database configuration from application.yml
             JsonObject dbConfig = config().getJsonObject("database");
             if (dbConfig == null) {
-                promise.fail("Database configuration not found in application.yml");
-                return promise.future();
+                return Future.failedFuture("Database configuration not found in application.yml");
             }
 
             log.info("Connecting to database: {}", dbConfig.getString("url"));
@@ -89,22 +86,15 @@ public class HttpServerVerticle extends AbstractVerticle {
             sqlClient = io.vertx.jdbcclient.JDBCPool.pool(vertx, poolConfig);
 
             // Test connection (schema already created in Oracle)
-            sqlClient.query("SELECT 1 FROM DUAL").execute()
-                    .onSuccess(result -> {
-                        log.info("Database connection test successful");
-                        promise.complete();
-                    })
-                    .onFailure(error -> {
-                        log.error("Database connection failed", error);
-                        promise.fail(error);
-                    });
+            return sqlClient.query("SELECT 1 FROM DUAL").execute()
+                    .onSuccess(result -> log.info("Database connection test successful"))
+                    .onFailure(error -> log.error("Database connection failed", error))
+                    .mapEmpty();
 
         } catch (Exception e) {
             log.error("Error initializing database", e);
-            promise.fail(e);
+            return Future.failedFuture(e);
         }
-
-        return promise.future();
     }
 
     private void initializeServices() {
@@ -140,8 +130,6 @@ public class HttpServerVerticle extends AbstractVerticle {
     }
 
     private Future<Void> startHttpServer() {
-        Promise<Void> promise = Promise.promise();
-
         Router router = Router.router(vertx);
 
         // Global handlers
@@ -166,16 +154,11 @@ public class HttpServerVerticle extends AbstractVerticle {
 
         int port = getPort();
 
-        vertx.createHttpServer()
+        return vertx.createHttpServer()
                 .requestHandler(router)
                 .listen(port)
-                .onSuccess(server -> {
-                    log.info("HTTP server listening on port {}", port);
-                    promise.complete();
-                })
-                .onFailure(promise::fail);
-
-        return promise.future();
+                .onSuccess(server -> log.info("HTTP server listening on port {}", port))
+                .mapEmpty();
     }
 
     private int getPort() {
