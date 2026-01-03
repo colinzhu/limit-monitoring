@@ -11,7 +11,6 @@ import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.SqlConnection;
 import io.vertx.sqlclient.Tuple;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -33,75 +32,107 @@ public class JdbcSettlementRepository implements SettlementRepository {
     public Future<Long> save(Settlement settlement, SqlConnection connection) {
         Promise<Long> promise = Promise.promise();
 
-        // First, get the next sequence value
-        // This ensures we have a valid ID before the insert
-        connection.query("SELECT SETTLEMENT_SEQ.NEXTVAL AS ID FROM DUAL").execute()
+        // For Oracle with GENERATED ALWAYS AS IDENTITY, use RETURNING clause
+        // The RETURNING clause returns the generated ID directly
+        // Note: Vert.x JDBC client handles RETURNING clause differently than plain SQL
+        String sql = "INSERT INTO SETTLEMENT (" +
+                "SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
+                "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
+                "BUSINESS_STATUS, DIRECTION, GROSS_NET, IS_OLD, " +
+                "CREATE_TIME, UPDATE_TIME" +
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "RETURNING ID INTO ?";
+
+        // For RETURNING clause, we need to pass a bind variable for the output
+        // However, Vert.x SqlClient doesn't support OUT parameters directly
+        // So we'll use a different approach: execute the insert and then query for the ID
+
+        Tuple params = Tuple.of(
+                settlement.getSettlementId(),
+                settlement.getSettlementVersion(),
+                settlement.getPts(),
+                settlement.getProcessingEntity(),
+                settlement.getCounterpartyId(),
+                settlement.getValueDate(),
+                settlement.getCurrency(),
+                settlement.getAmount(),
+                settlement.getBusinessStatus().getValue(),
+                settlement.getDirection().getValue(),
+                settlement.getSettlementType().getValue(),
+                settlement.getIsOld() ? 1 : 0,
+                LocalDateTime.now(),
+                LocalDateTime.now()
+        );
+
+        // First, try to insert and get the ID using RETURNING
+        // Since Vert.x doesn't directly support RETURNING INTO with bind variables,
+        // we'll use a two-step approach for Oracle compatibility
+
+        // Step 1: Execute the insert
+        String insertSql = "INSERT INTO SETTLEMENT (" +
+                "SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
+                "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
+                "BUSINESS_STATUS, DIRECTION, GROSS_NET, IS_OLD, " +
+                "CREATE_TIME, UPDATE_TIME" +
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        connection.preparedQuery(insertSql)
+                .execute(params)
                 .compose(result -> {
-                    if (result.size() == 0) {
-                        promise.fail("No sequence value returned");
-                        return Future.failedFuture("No sequence value");
-                    }
+                    // After successful insert, query for the generated ID
+                    // Use the unique constraint fields to find the newly inserted record
+                    String selectSql = "SELECT ID FROM SETTLEMENT " +
+                            "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? AND SETTLEMENT_VERSION = ? " +
+                            "ORDER BY ID DESC FETCH FIRST 1 ROW ONLY";
 
-                    var row = result.iterator().next();
-                    Long id = row.getLong(0);
-
-                    // Now insert with the explicit ID
-                    String sql = "INSERT INTO SETTLEMENT (" +
-                            "ID, SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
-                            "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
-                            "BUSINESS_STATUS, DIRECTION, GROSS_NET, IS_OLD, " +
-                            "CREATE_TIME, UPDATE_TIME" +
-                            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-                    Tuple params = Tuple.of(
-                            id,                                    // ID from sequence
+                    Tuple selectParams = Tuple.of(
                             settlement.getSettlementId(),
-                            settlement.getSettlementVersion(),
                             settlement.getPts(),
                             settlement.getProcessingEntity(),
-                            settlement.getCounterpartyId(),
-                            settlement.getValueDate(),
-                            settlement.getCurrency(),
-                            settlement.getAmount(),
-                            settlement.getBusinessStatus().getValue(),
-                            settlement.getDirection().getValue(),
-                            settlement.getSettlementType().getValue(),
-                            settlement.getIsOld() ? 1 : 0,
-                            LocalDateTime.now(),
-                            LocalDateTime.now()
+                            settlement.getSettlementVersion()
                     );
 
-                    return connection.preparedQuery(sql).execute(params)
-                            .map(id)
-                            .recover(throwable -> {
-                                // Check if this is a duplicate constraint violation
-                                // Oracle: ORA-00001, H2: 23505
-                                String errorMsg = throwable.getMessage();
-                                boolean isDuplicate = errorMsg != null &&
-                                    (errorMsg.contains("ORA-00001") ||
-                                     errorMsg.contains("23505") ||
-                                     errorMsg.contains("unique constraint") ||
-                                     errorMsg.contains("UniqueConstraintViolation"));
-
-                                if (isDuplicate) {
-                                    // Query for the existing settlement's ID
-                                    System.out.println("DEBUG save: Duplicate detected, querying for existing ID");
-                                    return findExistingSettlementId(
-                                        settlement.getSettlementId(),
-                                        settlement.getPts(),
-                                        settlement.getProcessingEntity(),
-                                        settlement.getSettlementVersion(),
-                                        connection
-                                    );
-                                }
-                                // Re-throw if it's not a duplicate error
-                                return Future.failedFuture(throwable);
-                            });
+                    return connection.preparedQuery(selectSql).execute(selectParams);
                 })
-                .onSuccess(id -> {
+                .map(result -> {
+                    if (result.size() > 0) {
+                        return result.iterator().next().getLong("ID");
+                    } else {
+                        throw new RuntimeException("Failed to retrieve generated ID after insert");
+                    }
+                })
+                .compose(id -> {
                     settlement.setId(id);
-                    promise.complete(id);
+                    return Future.succeededFuture(id);
                 })
+                .recover(throwable -> {
+                    // Check if this is a duplicate constraint violation
+                    // Oracle: ORA-00001, H2: 23505
+                    String errorMsg = throwable.getMessage();
+                    boolean isDuplicate = errorMsg != null &&
+                            (errorMsg.contains("ORA-00001") ||
+                             errorMsg.contains("23505") ||
+                             errorMsg.contains("unique constraint") ||
+                             errorMsg.contains("UniqueConstraintViolation"));
+
+                    if (isDuplicate) {
+                        // Query for the existing settlement's ID
+                        System.out.println("DEBUG save: Duplicate detected, querying for existing ID");
+                        return findExistingSettlementId(
+                                settlement.getSettlementId(),
+                                settlement.getPts(),
+                                settlement.getProcessingEntity(),
+                                settlement.getSettlementVersion(),
+                                connection
+                        ).map(existingId -> {
+                            settlement.setId(existingId);
+                            return existingId;
+                        });
+                    }
+                    // Re-throw if it's not a duplicate error
+                    return Future.failedFuture(throwable);
+                })
+                .onSuccess(promise::complete)
                 .onFailure(promise::fail);
 
         return promise.future();

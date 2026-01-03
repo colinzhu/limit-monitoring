@@ -386,5 +386,10 @@ curl http://localhost:8081/health
 - **Official docs**: https://vertx.io/ - comprehensive documentation and guides
 - **Pattern reference**: Examine existing code patterns in this project for Vert.x best practices
 
-## Code best practices
+## Coding best practices
 - **Prevent redundant `Promis`**: For logic already returns a `Future`, return it directly instead of creating a `Promise` and `complete` it.
+- **Use Lombok**: Use lambok annotations to reduce boilerplate code. e.g. `@Data` for getter/setter, `@Builder` for builder pattern, `@AllArgsConstructor` for constructor. @Slf4j for logger
+
+## Tools for claude to use
+- **WebFetch**: this tool always has error, so use curl instead
+- **WebSearch**: this tool always return nothing, so use chrome-devtool-mcp to search in cn.bing.com instead

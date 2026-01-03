@@ -9,6 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
+import java.io.FileWriter;
+import java.io.IOException;
 
 /**
  * Main application entry point
@@ -18,6 +20,9 @@ public class Main {
 
     public static void main(String[] args) {
         log.info("Starting Payment Limit Monitoring System...");
+
+        // Write PID to file for easy process management
+        writePidToFile();
 
         // Create Vertx instance with options
         VertxOptions options = new VertxOptions()
@@ -114,5 +119,20 @@ public class Main {
                         .put("password", "tvpc123")
                         .put("max_pool_size", 20)
                 );
+    }
+
+    /**
+     * Write the current process PID to a file for easy management
+     */
+    private static void writePidToFile() {
+        try {
+            String pid = String.valueOf(ProcessHandle.current().pid());
+            try (FileWriter writer = new FileWriter("app.pid")) {
+                writer.write(pid);
+            }
+            log.info("PID written to app.pid: {}", pid);
+        } catch (IOException e) {
+            log.warn("Failed to write PID to file: {}", e.getMessage());
+        }
     }
 }
