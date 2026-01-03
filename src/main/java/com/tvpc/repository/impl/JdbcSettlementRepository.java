@@ -10,6 +10,7 @@ import io.vertx.core.Promise;
 import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.SqlConnection;
 import io.vertx.sqlclient.Tuple;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -20,6 +21,7 @@ import java.util.Optional;
 /**
  * JDBC implementation of SettlementRepository
  */
+@Slf4j
 public class JdbcSettlementRepository implements SettlementRepository {
 
     private final SqlClient sqlClient;
@@ -98,7 +100,7 @@ public class JdbcSettlementRepository implements SettlementRepository {
 
                     if (isDuplicate) {
                         // Query for the existing settlement's ID
-                        System.out.println("DEBUG save: Duplicate detected, querying for existing ID");
+                        log.debug("save: Duplicate detected, querying for existing ID");
                         return findExistingSettlementId(
                                 settlement.getSettlementId(),
                                 settlement.getPts(),

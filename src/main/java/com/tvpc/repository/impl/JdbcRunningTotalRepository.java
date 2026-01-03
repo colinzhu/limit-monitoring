@@ -6,6 +6,7 @@ import io.vertx.core.Promise;
 import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.SqlConnection;
 import io.vertx.sqlclient.Tuple;
+import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -14,6 +15,7 @@ import java.time.LocalDateTime;
 /**
  * JDBC implementation of RunningTotalRepository
  */
+@Slf4j
 public class JdbcRunningTotalRepository implements RunningTotalRepository {
 
     private final SqlClient sqlClient;
@@ -37,12 +39,8 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
         LocalDateTime now = LocalDateTime.now();
 
         // Log the parameters for debugging
-        System.out.println("DEBUG updateRunningTotal: pts=" + pts +
-            ", pe=" + processingEntity +
-            ", cp=" + counterpartyId +
-            ", vd=" + valueDate +
-            ", total=" + runningTotal +
-            ", refId=" + refId);
+        log.debug("updateRunningTotal: pts={}, pe={}, cp={}, vd={}, total={}, refId={}",
+                pts, processingEntity, counterpartyId, valueDate, runningTotal, refId);
 
         // Use MERGE for Oracle (UPSERT pattern)
         // Parameters:
@@ -73,17 +71,17 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
                 now                     // 9: UPDATE_TIME for NOT MATCHED
         );
 
-        System.out.println("DEBUG SQL: " + sql);
-        System.out.println("DEBUG params: " + params);
+        log.debug("SQL: {}", sql);
+        log.debug("params: {}", params);
 
         connection.preparedQuery(sql)
                 .execute(params)
                 .onSuccess(result -> {
-                    System.out.println("DEBUG: updateRunningTotal succeeded");
+                    log.debug("updateRunningTotal succeeded");
                     promise.complete();
                 })
                 .onFailure(error -> {
-                    System.err.println("DEBUG: updateRunningTotal failed: " + error.getMessage());
+                    log.error("updateRunningTotal failed: {}", error.getMessage(), error);
                     promise.fail(error);
                 });
 
@@ -134,11 +132,8 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
         Promise<Void> promise = Promise.promise();
 
         // Log the parameters for debugging
-        System.out.println("DEBUG calculateAndSaveRunningTotal: pts=" + pts +
-            ", pe=" + processingEntity +
-            ", cp=" + counterpartyId +
-            ", vd=" + valueDate +
-            ", maxSeqId=" + maxSeqId);
+        log.debug("calculateAndSaveRunningTotal: pts={}, pe={}, cp={}, vd={}, maxSeqId={}",
+                pts, processingEntity, counterpartyId, valueDate, maxSeqId);
 
         // Combined SQL: Calculates running total from settlements and updates RUNNING_TOTAL in one operation
         // Uses MERGE for Oracle (UPSERT pattern)
@@ -194,17 +189,17 @@ public class JdbcRunningTotalRepository implements RunningTotalRepository {
                 maxSeqId                // 10: For WHERE clause (ID <= maxSeqId)
         );
 
-        System.out.println("DEBUG SQL: " + sql);
-        System.out.println("DEBUG params: " + params);
+        log.debug("SQL: {}", sql);
+        log.debug("params: {}", params);
 
         connection.preparedQuery(sql)
                 .execute(params)
                 .onSuccess(result -> {
-                    System.out.println("DEBUG: calculateAndSaveRunningTotal succeeded");
+                    log.debug("calculateAndSaveRunningTotal succeeded");
                     promise.complete();
                 })
                 .onFailure(error -> {
-                    System.err.println("DEBUG: calculateAndSaveRunningTotal failed: " + error.getMessage());
+                    log.error("calculateAndSaveRunningTotal failed: {}", error.getMessage(), error);
                     promise.fail(error);
                 });
 
