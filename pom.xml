@@ -75,6 +75,14 @@
             <version>5.1.0</version>
         </dependency>
 
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.30</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Jackson for JSON processing - use same version as Vert.x -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

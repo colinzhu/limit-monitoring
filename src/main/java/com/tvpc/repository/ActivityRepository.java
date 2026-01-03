@@ -1,6 +1,7 @@
 package com.tvpc.repository;
 
 import io.vertx.core.Future;
+import lombok.Value;
 
 import java.time.LocalDateTime;
 
@@ -60,6 +61,7 @@ public interface ActivityRepository {
     /**
      * Inner class for workflow information
      */
+    @Value
     class WorkflowInfo {
         private final String requesterId;
         private final String requesterName;
@@ -67,22 +69,5 @@ public interface ActivityRepository {
         private final String authorizerId;
         private final String authorizerName;
         private final LocalDateTime authorizeTime;
-
-        public WorkflowInfo(String requesterId, String requesterName, LocalDateTime requestTime,
-                           String authorizerId, String authorizerName, LocalDateTime authorizeTime) {
-            this.requesterId = requesterId;
-            this.requesterName = requesterName;
-            this.requestTime = requestTime;
-            this.authorizerId = authorizerId;
-            this.authorizerName = authorizerName;
-            this.authorizeTime = authorizeTime;
-        }
-
-        public String getRequesterId() { return requesterId; }
-        public String getRequesterName() { return requesterName; }
-        public LocalDateTime getRequestTime() { return requestTime; }
-        public String getAuthorizerId() { return authorizerId; }
-        public String getAuthorizerName() { return authorizerName; }
-        public LocalDateTime getAuthorizeTime() { return authorizeTime; }
     }
 }

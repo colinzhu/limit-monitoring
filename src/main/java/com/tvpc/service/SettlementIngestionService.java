@@ -14,6 +14,7 @@ import com.tvpc.validation.SettlementValidator;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.SqlConnection;
+import lombok.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -236,29 +237,26 @@ public class SettlementIngestionService {
      * Convert DTO to domain object
      */
     private Settlement convertToDomain(SettlementRequest request) {
-        return new Settlement(
-                request.getSettlementId(),
-                request.getSettlementVersion(),
-                request.getPts(),
-                request.getProcessingEntity(),
-                request.getCounterpartyId(),
-                LocalDate.parse(request.getValueDate()),
-                request.getCurrency(),
-                request.getAmount(),
-                BusinessStatus.fromValue(request.getBusinessStatus()),
-                SettlementDirection.fromValue(request.getDirection()),
-                SettlementType.fromValue(request.getSettlementType())
-        );
+        return Settlement.builder()
+                .settlementId(request.getSettlementId())
+                .settlementVersion(request.getSettlementVersion())
+                .pts(request.getPts())
+                .processingEntity(request.getProcessingEntity())
+                .counterpartyId(request.getCounterpartyId())
+                .valueDate(LocalDate.parse(request.getValueDate()))
+                .currency(request.getCurrency())
+                .amount(request.getAmount())
+                .businessStatus(BusinessStatus.fromValue(request.getBusinessStatus()))
+                .direction(SettlementDirection.fromValue(request.getDirection()))
+                .settlementType(SettlementType.fromValue(request.getSettlementType()))
+                .isOld(false)
+                .build();
     }
 
     // Helper class for counterparty change result
+    @Value
     private static class CounterpartyChangeResult {
-        final Long seqId;
-        final Optional<String> oldCounterparty;
-
-        CounterpartyChangeResult(Long seqId, Optional<String> oldCounterparty) {
-            this.seqId = seqId;
-            this.oldCounterparty = oldCounterparty;
-        }
+        Long seqId;
+        Optional<String> oldCounterparty;
     }
 }

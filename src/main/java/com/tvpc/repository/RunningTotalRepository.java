@@ -2,6 +2,7 @@ package com.tvpc.repository;
 
 import io.vertx.core.Future;
 import io.vertx.sqlclient.SqlConnection;
+import lombok.Value;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -70,21 +71,9 @@ public interface RunningTotalRepository {
     /**
      * Inner class for running total data
      */
+    @Value
     class RunningTotal {
         private final BigDecimal total;
         private final Long refId;
-
-        public RunningTotal(BigDecimal total, Long refId) {
-            this.total = total;
-            this.refId = refId;
-        }
-
-        public BigDecimal getTotal() {
-            return total;
-        }
-
-        public Long getRefId() {
-            return refId;
-        }
     }
 }

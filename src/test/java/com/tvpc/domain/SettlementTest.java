@@ -14,19 +14,20 @@ class SettlementTest {
 
     @Test
     void testSettlementCreation() {
-        Settlement settlement = new Settlement(
-                "SETT-12345",
-                1735689600000L,
-                "PTS-A",
-                "PE-001",
-                "CP-ABC",
-                LocalDate.of(2025, 12, 31),
-                "EUR",
-                new BigDecimal("1000000.00"),
-                BusinessStatus.VERIFIED,
-                SettlementDirection.PAY,
-                SettlementType.GROSS
-        );
+        Settlement settlement = Settlement.builder()
+                .settlementId("SETT-12345")
+                .settlementVersion(1735689600000L)
+                .pts("PTS-A")
+                .processingEntity("PE-001")
+                .counterpartyId("CP-ABC")
+                .valueDate(LocalDate.of(2025, 12, 31))
+                .currency("EUR")
+                .amount(new BigDecimal("1000000.00"))
+                .businessStatus(BusinessStatus.VERIFIED)
+                .direction(SettlementDirection.PAY)
+                .settlementType(SettlementType.GROSS)
+                .isOld(false)
+                .build();
 
         assertEquals("SETT-12345", settlement.getSettlementId());
         assertEquals(1735689600000L, settlement.getSettlementVersion());
@@ -115,18 +116,19 @@ class SettlementTest {
     }
 
     private Settlement createSettlement(SettlementDirection direction, BusinessStatus status) {
-        return new Settlement(
-                "SETT-12345",
-                1735689600000L,
-                "PTS-A",
-                "PE-001",
-                "CP-ABC",
-                LocalDate.of(2025, 12, 31),
-                "EUR",
-                new BigDecimal("1000000.00"),
-                status,
-                direction,
-                SettlementType.GROSS
-        );
+        return Settlement.builder()
+                .settlementId("SETT-12345")
+                .settlementVersion(1735689600000L)
+                .pts("PTS-A")
+                .processingEntity("PE-001")
+                .counterpartyId("CP-ABC")
+                .valueDate(LocalDate.of(2025, 12, 31))
+                .currency("EUR")
+                .amount(new BigDecimal("1000000.00"))
+                .businessStatus(status)
+                .direction(direction)
+                .settlementType(SettlementType.GROSS)
+                .isOld(false)
+                .build();
     }
 }

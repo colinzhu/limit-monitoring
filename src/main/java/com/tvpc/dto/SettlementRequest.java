@@ -2,12 +2,14 @@ package com.tvpc.dto;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.Value;
 
 import java.math.BigDecimal;
 
 /**
  * DTO for incoming settlement data from external trading systems
  */
+@Value
 public class SettlementRequest {
     private final String settlementId;
     private final Long settlementVersion;
@@ -46,67 +48,5 @@ public class SettlementRequest {
         this.businessStatus = businessStatus;
         this.direction = direction;
         this.settlementType = settlementType;
-    }
-
-    // Getters
-    public String getSettlementId() {
-        return settlementId;
-    }
-
-    public Long getSettlementVersion() {
-        return settlementVersion;
-    }
-
-    public String getPts() {
-        return pts;
-    }
-
-    public String getProcessingEntity() {
-        return processingEntity;
-    }
-
-    public String getCounterpartyId() {
-        return counterpartyId;
-    }
-
-    public String getValueDate() {
-        return valueDate;
-    }
-
-    public String getCurrency() {
-        return currency;
-    }
-
-    public BigDecimal getAmount() {
-        return amount;
-    }
-
-    public String getBusinessStatus() {
-        return businessStatus;
-    }
-
-    public String getDirection() {
-        return direction;
-    }
-
-    public String getSettlementType() {
-        return settlementType;
-    }
-
-    @Override
-    public String toString() {
-        return "SettlementRequest{" +
-                "settlementId='" + settlementId + '\'' +
-                ", settlementVersion=" + settlementVersion +
-                ", pts='" + pts + '\'' +
-                ", processingEntity='" + processingEntity + '\'' +
-                ", counterpartyId='" + counterpartyId + '\'' +
-                ", valueDate='" + valueDate + '\'' +
-                ", currency='" + currency + '\'' +
-                ", amount=" + amount +
-                ", businessStatus='" + businessStatus + '\'' +
-                ", direction='" + direction + '\'' +
-                ", settlementType='" + settlementType + '\'' +
-                '}';
     }
 }
