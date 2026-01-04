@@ -13,8 +13,8 @@
 
 **Status**: Phase 1 90% complete - Settlement Ingestion Flow fully implemented. This is a working implementation, needs fine-tuning.
 **TO DO**:
-- [ ] ingestion flow save settlement to return auto generated REF_ID
-- [ ] and fix the duplicate settlement able to be saved issue
+- [x] ingestion flow save settlement to return auto generated REF_ID
+- [x] and fix the duplicate settlement able to be saved issue
 - [x] update project structure to use hexagonal architecture
 
 ## Technology Stack
@@ -63,6 +63,7 @@
 4. Check for any integration issues
 5. Always run tests before committing
 6. When debugging, add new log messages when necessary to improve the efficiency
+7. Use less visiblity of java class and methods
 
 ## Tools for claude to use
 - **WebFetch**: this tool always has error, so use curl instead
@@ -107,21 +108,28 @@ podman start oracle-db
 ## Key Files to Reference (Hexagonal Architecture)
 
 **Application Layer (Use Cases):**
-- `src/main/java/com/tvpc/application/service/SettlementIngestionService.java` - Main orchestrator
+- `src/main/java/com/tvpc/application/service/SettlementIngestionUseCaseImpl.java` - Main ingestion orchestrator
+- `src/main/java/com/tvpc/application/service/ApprovalUseCaseImpl.java` - Approval workflow
+- `src/main/java/com/tvpc/application/service/RecalculateUseCaseImpl.java` - Recalculation logic
+- `src/main/java/com/tvpc/application/service/SettlementQueryUseCaseImpl.java` - Query operations
 - `src/main/java/com/tvpc/application/service/SettlementValidator.java` - Input validation
 - `src/main/java/com/tvpc/application/port/in/SettlementIngestionUseCase.java` - Input port interface
+- `src/main/java/com/tvpc/application/port/out/SettlementRepository.java` - Output port interface
 
 **Domain Layer:**
 - `src/main/java/com/tvpc/domain/model/Settlement.java` - Core entity
+- `src/main/java/com/tvpc/domain/model/RunningTotal.java` - Aggregated exposure entity
 - `src/main/java/com/tvpc/domain/event/SettlementEvent.java` - Domain events
 
 **Adapter Layer:**
-- `src/main/java/com/tvpc/adapter/in/web/SettlementIngestionHandler.java` - HTTP handler
+- `src/main/java/com/tvpc/adapter/in/web/ingestion/SettlementIngestionHandler.java` - HTTP handler
+- `src/main/java/com/tvpc/adapter/in/web/HttpServerVerticle.java` - HTTP server setup
+- `src/main/java/com/tvpc/adapter/in/web/WebRouter.java` - Route configuration
 - `src/main/java/com/tvpc/adapter/out/persistence/JdbcSettlementPersistenceAdapter.java` - DB operations
 
 **Infrastructure:**
-- `src/main/java/com/tvpc/infrastructure/Main.java` - Application entry point
-- `src/main/java/com/tvpc/infrastructure/config/HttpServerVerticle.java` - HTTP server setup
+- `src/main/java/com/tvpc/Main.java` - Application entry point
+- `src/main/java/com/tvpc/SettlementEventCodec.java` - Event bus codec
 
 **Configuration:**
 - `src/main/resources/application.yml` - App config (HTTP port, DB connection)
@@ -136,21 +144,32 @@ src/main/java/com/tvpc/
 ├── application/                    # APPLICATION LAYER (Use Cases)
 │   ├── port/
 │   │   ├── in/                    # Input Ports (Use Case Interfaces)
-│   │   │   └── SettlementIngestionUseCase.java
+│   │   │   ├── SettlementIngestionUseCase.java
+│   │   │   ├── ApprovalUseCase.java
+│   │   │   ├── RecalculateUseCase.java
+│   │   │   └── SettlementQueryUseCase.java
 │   │   └── out/                   # Output Ports (Repository Interfaces)
-│   │       ├── SettlementPersistencePort.java
-│   │       ├── RunningTotalPersistencePort.java
-│   │       ├── ActivityPersistencePort.java
-│   │       ├── ExchangeRatePersistencePort.java
-│   │       └── ConfigurationPort.java
+│   │       ├── SettlementRepository.java
+│   │       ├── RunningTotalRepository.java
+│   │       ├── ActivityRepository.java
+│   │       ├── ExchangeRateRepository.java
+│   │       ├── NotificationRepository.java
+│   │       ├── ConfigurationRepository.java
+│   │       └── DomainEventPublisher.java
 │   └── service/                   # Use Case Implementations
-│       ├── SettlementIngestionService.java
+│       ├── SettlementIngestionUseCaseImpl.java
+│       ├── ApprovalUseCaseImpl.java
+│       ├── RecalculateUseCaseImpl.java
+│       ├── SettlementQueryUseCaseImpl.java
 │       ├── SettlementValidator.java
 │       └── ValidationResult.java
 │
 ├── domain/                        # DOMAIN LAYER (Pure Business Logic)
 │   ├── model/                     # Domain Entities
 │   │   ├── Settlement.java
+│   │   ├── RunningTotal.java
+│   │   ├── Activity.java
+│   │   ├── ExchangeRate.java
 │   │   ├── BusinessStatus.java
 │   │   ├── SettlementDirection.java
 │   │   └── SettlementType.java
@@ -160,24 +179,31 @@ src/main/java/com/tvpc/
 ├── adapter/                       # ADAPTER LAYER
 │   ├── in/
 │   │   └── web/                   # Input Adapters (HTTP)
-│   │       ├── SettlementIngestionHandler.java
-│   │       ├── SettlementRouter.java
-│   │       └── dto/
-│   │           ├── SettlementRequest.java
-│   │           └── SettlementResponse.java
+│   │       ├── HttpServerVerticle.java
+│   │       ├── WebRouter.java
+│   │       ├── ingestion/
+│   │       │   ├── SettlementIngestionHandler.java
+│   │       │   ├── SettlementIngestionRequest.java
+│   │       │   └── SettlementIngestionResponse.java
+│   │       ├── approval/
+│   │       │   └── ApprovalRequest.java
+│   │       ├── recalculate/
+│   │       │   ├── RecalculateHandler.java
+│   │       │   └── RecalculateRequest.java
+│   │       └── settlementquery/
+│   │           └── SettlementQueryResponse.java
 │   └── out/
-│       └── persistence/           # Output Adapters (Database)
-│           ├── JdbcSettlementPersistenceAdapter.java
-│           ├── JdbcRunningTotalPersistenceAdapter.java
-│           ├── JdbcActivityPersistenceAdapter.java
-│           ├── JdbcExchangeRatePersistenceAdapter.java
-│           └── InMemoryConfigurationAdapter.java
+│       ├── persistence/           # Output Adapters (Database)
+│       │   ├── JdbcSettlementPersistenceAdapter.java
+│       │   ├── JdbcRunningTotalPersistenceAdapter.java
+│       │   ├── JdbcActivityPersistenceAdapter.java
+│       │   ├── JdbcExchangeRatePersistenceAdapter.java
+│       │   └── InMemoryConfigurationAdapter.java
+│       ├── http/                  # Output Adapters (External HTTP)
+│       └── messaging/             # Output Adapters (Event Publishing)
 │
-└── infrastructure/                # INFRASTRUCTURE LAYER
-    ├── Main.java                  # Application entry point
-    └── config/
-        ├── HttpServerVerticle.java    # Wires up hexagonal architecture
-        └── SettlementEventCodec.java  # Event bus codec
+├── Main.java                      # Application entry point
+└── SettlementEventCodec.java      # Event bus codec
 
 src/main/resources/
 ├── db/schema.sql        # Oracle DDL for 6 tables
@@ -188,27 +214,29 @@ src/main/resources/
 ### Hexagonal Architecture Layers
 
 **Domain Layer** - Pure business logic, no external dependencies
-- Entities: Settlement, BusinessStatus, SettlementDirection, SettlementType
+- Entities: Settlement, RunningTotal, Activity, ExchangeRate, BusinessStatus, SettlementDirection, SettlementType
 - Events: SettlementEvent
 
 **Application Layer** - Use cases and orchestration
-- Input Ports: Define what the application can do (SettlementIngestionUseCase)
-- Output Ports: Define what the application needs (persistence interfaces)
+- Input Ports: Define what the application can do (SettlementIngestionUseCase, ApprovalUseCase, RecalculateUseCase, SettlementQueryUseCase)
+- Output Ports: Define what the application needs (Repository interfaces, DomainEventPublisher)
 - Services: Implement use cases using ports
 
 **Adapter Layer** - Connect to external systems
-- Input Adapters: HTTP handlers that call input ports
-- Output Adapters: JDBC implementations of output ports
+- Input Adapters: HTTP handlers organized by feature (ingestion, approval, recalculate, query)
+- Output Adapters: JDBC implementations of repository ports, HTTP clients, messaging adapters
 
 **Infrastructure Layer** - Framework and configuration
 - Main: Application bootstrap
 - HttpServerVerticle: Wires up all components
+- SettlementEventCodec: Event bus serialization
 
 ### Key Class Responsibilities
-- **SettlementIngestionService** - Implements 5-step ingestion flow via SettlementIngestionUseCase
-- **JdbcSettlementPersistenceAdapter** - Implements SettlementPersistencePort for database operations
+- **SettlementIngestionUseCaseImpl** - Implements 5-step ingestion flow via SettlementIngestionUseCase
+- **JdbcSettlementPersistenceAdapter** - Implements SettlementRepository for database operations
 - **SettlementIngestionHandler** - HTTP adapter that converts requests to use case commands
 - **HttpServerVerticle** - Dependency injection and wiring of all components
+- **WebRouter** - Configures HTTP routes for all endpoints
 
 
 ## Database Schema (6 Tables)
