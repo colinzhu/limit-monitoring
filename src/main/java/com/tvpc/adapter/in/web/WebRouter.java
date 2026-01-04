@@ -15,21 +15,6 @@ public class WebRouter {
     private final SettlementIngestionHandler settlementIngestionHandler;
 
     public void setupRoutes() {
-        // CORS headers
-        router.route().handler(ctx -> {
-            ctx.response()
-                    .putHeader("Access-Control-Allow-Origin", "*")
-                    .putHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                    .putHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-                    .putHeader("Access-Control-Allow-Credentials", "true");
-            ctx.next();
-        });
-
-        // Handle OPTIONS preflight requests
-        router.options("/api/settlements").handler(ctx -> {
-            ctx.response().setStatusCode(204).end();
-        });
-
         // Settlement ingestion endpoint
         router.post("/api/settlements")
                 .handler(BodyHandler.create())
@@ -49,6 +34,14 @@ public class WebRouter {
                     ctx.response()
                             .putHeader("Content-Type", "application/json")
                             .end("{\"name\":\"Payment Limit Monitoring System\",\"version\":\"1.0.0\"}");
+                });
+
+        // API Test UI endpoint
+        router.get("/api-test")
+                .handler(ctx -> {
+                    ctx.response()
+                            .putHeader("Content-Type", "text/html; charset=utf-8")
+                            .sendFile("static/api-test.html");
                 });
     }
 }

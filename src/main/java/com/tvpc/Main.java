@@ -50,6 +50,7 @@ public class Main {
                     log.info("Payment Limit Monitoring System is ready!");
                     log.info("API Endpoint: http://localhost:8081/api/settlements");
                     log.info("Health Check: http://localhost:8081/health");
+                    log.info("API Test UI: http://localhost:8081/api-test");
                 })
                 .onFailure(error -> {
                     log.error("Failed to deploy HTTP Server Verticle", error);
