@@ -1,7 +1,8 @@
 package com.tvpc.validation;
 
-import com.tvpc.dto.SettlementRequest;
-import com.tvpc.dto.ValidationResult;
+import com.tvpc.application.dto.SettlementRequest;
+import com.tvpc.application.dto.ValidationResult;
+import com.tvpc.domain.service.SettlementValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

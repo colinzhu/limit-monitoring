@@ -1,5 +1,10 @@
 package com.tvpc.domain;
 
+import com.tvpc.domain.model.BusinessStatus;
+import com.tvpc.domain.model.Settlement;
+import com.tvpc.domain.model.SettlementDirection;
+import com.tvpc.domain.model.SettlementType;
+
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
