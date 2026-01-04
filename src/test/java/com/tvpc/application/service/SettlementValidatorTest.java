@@ -1,7 +1,6 @@
-package com.tvpc.validation;
+package com.tvpc.application.service;
 
-import com.tvpc.dto.SettlementRequest;
-import com.tvpc.dto.ValidationResult;
+import com.tvpc.application.port.in.SettlementIngestionUseCase.SettlementIngestionCommand;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -23,7 +22,7 @@ class SettlementValidatorTest {
 
     @Test
     void testValidSettlementRequest() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
@@ -37,57 +36,46 @@ class SettlementValidatorTest {
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertTrue(result.isValid(), "Valid settlement should pass validation");
-        assertTrue(result.getErrors().isEmpty(), "No errors expected for valid settlement");
+        assertTrue(result.errors().isEmpty(), "No errors expected for valid settlement");
     }
 
     @Test
     void testMissingRequiredFields() {
-        SettlementRequest request = new SettlementRequest(
-                null,  // missing settlementId
-                null,  // missing version
-                null,  // missing pts
-                null,  // missing processingEntity
-                null,  // missing counterpartyId
-                null,  // missing valueDate
-                null,  // missing currency
-                null,  // missing amount
-                null,  // missing businessStatus
-                null,  // missing direction
-                null   // missing settlementType
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
+                null, null, null, null, null, null, null, null, null, null, null
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with missing fields");
-        assertEquals(11, result.getErrors().size(), "Should have 11 errors for missing fields");
+        assertEquals(11, result.errors().size(), "Should have 11 errors for missing fields");
     }
 
     @Test
     void testInvalidCurrency() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
                 "PE-001",
                 "CP-ABC",
                 "2025-12-31",
-                "EURR",  // invalid currency
+                "EURR",
                 new BigDecimal("1000000.00"),
                 "VERIFIED",
                 "PAY",
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with invalid currency");
-        assertTrue(result.getErrors().toString().contains("currency"),
-                "Error should mention currency");
+        assertTrue(result.errors().toString().contains("currency"), "Error should mention currency");
     }
 
     @Test
     void testNegativeAmount() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
@@ -95,25 +83,25 @@ class SettlementValidatorTest {
                 "CP-ABC",
                 "2025-12-31",
                 "EUR",
-                new BigDecimal("-1000.00"),  // negative amount
+                new BigDecimal("-1000.00"),
                 "VERIFIED",
                 "PAY",
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with negative amount");
     }
 
     @Test
     void testInvalidDate() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
                 "PE-001",
                 "CP-ABC",
-                "2025-13-45",  // invalid date
+                "2025-13-45",
                 "EUR",
                 new BigDecimal("1000000.00"),
                 "VERIFIED",
@@ -121,13 +109,13 @@ class SettlementValidatorTest {
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with invalid date format");
     }
 
     @Test
     void testInvalidDirection() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
@@ -137,17 +125,17 @@ class SettlementValidatorTest {
                 "EUR",
                 new BigDecimal("1000000.00"),
                 "VERIFIED",
-                "INVALID",  // invalid direction
+                "INVALID",
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with invalid direction");
     }
 
     @Test
     void testInvalidBusinessStatus() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
@@ -156,18 +144,18 @@ class SettlementValidatorTest {
                 "2025-12-31",
                 "EUR",
                 new BigDecimal("1000000.00"),
-                "INVALID_STATUS",  // invalid status
+                "INVALID_STATUS",
                 "PAY",
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with invalid business status");
     }
 
     @Test
     void testInvalidSettlementType() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
@@ -178,22 +166,22 @@ class SettlementValidatorTest {
                 new BigDecimal("1000000.00"),
                 "VERIFIED",
                 "PAY",
-                "INVALID_TYPE"  // invalid type
+                "INVALID_TYPE"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with invalid settlement type");
     }
 
     @Test
     void testPastDate() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
                 "PE-001",
                 "CP-ABC",
-                "2000-01-01",  // past date (acceptable)
+                "2000-01-01",
                 "EUR",
                 new BigDecimal("1000000.00"),
                 "VERIFIED",
@@ -201,13 +189,13 @@ class SettlementValidatorTest {
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertTrue(result.isValid(), "Past dates are acceptable for settlements");
     }
 
     @Test
     void testExcessiveAmount() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
                 1735689600000L,
                 "PTS-A",
@@ -215,21 +203,21 @@ class SettlementValidatorTest {
                 "CP-ABC",
                 "2025-12-31",
                 "EUR",
-                new BigDecimal("9999999999999.99"),  // too large
+                new BigDecimal("9999999999999.99"),
                 "VERIFIED",
                 "PAY",
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with excessive amount");
     }
 
     @Test
     void testInvalidVersion() {
-        SettlementRequest request = new SettlementRequest(
+        SettlementIngestionCommand command = new SettlementIngestionCommand(
                 "SETT-12345",
-                -1L,  // negative version
+                -1L,
                 "PTS-A",
                 "PE-001",
                 "CP-ABC",
@@ -241,7 +229,7 @@ class SettlementValidatorTest {
                 "GROSS"
         );
 
-        ValidationResult result = validator.validate(request);
+        ValidationResult result = validator.validate(command);
         assertFalse(result.isValid(), "Should fail with invalid version");
     }
 }

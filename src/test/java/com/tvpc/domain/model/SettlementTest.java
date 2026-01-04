@@ -1,4 +1,4 @@
-package com.tvpc.domain;
+package com.tvpc.domain.model;
 
 import org.junit.jupiter.api.Test;
 
@@ -96,7 +96,6 @@ class SettlementTest {
         Settlement s2 = createSettlement(SettlementDirection.PAY, BusinessStatus.VERIFIED);
         Settlement s3 = createSettlement(SettlementDirection.PAY, BusinessStatus.PENDING);
 
-        // Set IDs to make them equal
         s1.setId(1L);
         s2.setId(1L);
         s3.setId(2L);
