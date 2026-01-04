@@ -1,18 +1,5 @@
 # Payment Limit Monitoring System - Architecture Design
 
-## Technology Stack
-- **Framework**: Vert.x 4.5.23
-- **Language**: Java 21
-- **Database**: Oracle Database
-- **Messaging**: No MQ (event-driven via Vert.x event bus)
-- **Libraries**:
-  - logback
-  - lombok
-
-## Architecture
-- **Critical**: Use Hexagonal Architecture
----
-
 ## Core Concept: Sequence ID as REF_ID
 
 The system uses an **auto-incrementing sequence ID** as the foundation for consistency:
@@ -51,6 +38,7 @@ Stores the **latest version** of each settlement:
   -- For the outer query
   CREATE INDEX idx_settlement_group_filter
   ON SETTLEMENT (PTS, PROCESSING_ENTITY, COUNTERPARTY_ID, VALUE_DATE, ID);
+- **Unique constraint**: `(SETTLEMENT_ID, PTS, PROCESSING_ENTITY, SETTLEMENT_VERSION)`
 
 ### SETTLEMENT_HIST Table
 Stores **old versions** of settlements (non-latest):
@@ -101,6 +89,31 @@ Will use existing DB queue component to store the notification messages.
 When a settlement arrives from an HTTP request (Vert.x HTTP server), it goes through the following steps. If there are any errors, reject the settlement with 500 status code.
 **Critical**: all the steps should be within one HTTP request/response
 
+### Understand the 5-Step Ingestion Flow
+Before modifying `SettlementIngestionService.java`, understand:
+- Step 0: Validation (SettlementValidator)
+- Step 1: Save → Get REF_ID
+- Step 2: Mark old versions
+- Step 3: Detect counterparty changes
+- Step 4: Generate events (1 or 2)
+- Step 5: Calculate running totals
+
+**Save settlement should in a separate transaction.**
+**Mark old version should in a separate transaction.**
+**Calculate running totals should in a separate transaction.**
+**Can support reprocessing from client, so need to be idempotent.**
+**Key**: All 5 steps are executed **synchronously** within the HTTP request. So that it doesn't need extra time on event dispatching.
+
+### The Sequence ID (REF_ID) - Critical Concept
+
+Every settlement gets an **auto-incrementing sequence ID** (`ID` column in SETTLEMENT table) that serves as the foundation for consistency:
+- Monotonically increasing primary key from Oracle identity column
+- **NOT a version number** - it only increases
+- Defines scope: "calculate running totals using all settlements with ID ≤ seqId"
+- Used as `REF_ID` in `RUNNING_TOTAL` table
+- Guarantees ordering and idempotency
+
+
 ### Step 0: Validate Settlement
 Before saving, validate all required fields:
 - **Required fields**: PTS, Processing_Entity, Counterparty_ID, Value_Date, Currency, Amount, Settlement_ID, Settlement_Version, Settlement_Direction, Settlement_Type, Business_Status
@@ -132,7 +145,7 @@ WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ?
 - Old records will be moved to `SETTLEMENT_HIST` daily non-busy hours
 - Question: how about move old directly to `SETTLEMENT_HIST` without marking old? - Answer: No, because detect `COUNTERPARTY_ID` change needs to check the old record
 
-### Step 3: Detect Counterparty Changes
+### Step 3: Detect Counterparty Change
 **Check for counterparty change**:
 ```sql
 -- Find previous one for the same settlement with different COUNTERPARTY_ID. Only check against the last one record.
@@ -143,7 +156,7 @@ WHERE ID = (SELECT MAX(ID) FROM SETTLEMENT WHERE SETTLEMENT_ID = ? AND PTS = ? A
 - Immediate after the Mark Old is completed.
 
 ### Step 4: Generate Events
-- **Event format**: `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE` and `REF_ID` - Sequence ID of current settlement
+- **Event contains**: `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE` and `REF_ID` - Sequence ID of current settlement
 - **Default**: 1 event
 - **If counterparty changed**: 2 events
   - One for old counterparty group
@@ -168,6 +181,46 @@ WHERE PTS = ? AND PROCESSING_ENTITY = ? AND COUNTERPARTY_ID = ? AND VALUE_DATE =
 AND REF_ID <= ? -- make sure it's "<=" so that can use same ID to trigger recalculation; also used to avoid concurrent updates by another thread/instance
 ``` 
 
+### **Duplicate Handling**: The database has a unique constraint on `(SETTLEMENT_ID, PTS, PROCESSING_ENTITY, SETTLEMENT_VERSION)`. If a duplicate is inserted:
+- The database throws a constraint violation exception
+- The service catches it and queries for the existing settlement's ID
+- Uses that ID as REF_ID for the rest of the flow
+- Returns HTTP 200 with the existing sequence ID
+- This makes the operation idempotent
+- This allows settlement resend from client can trigger all the steps in case of a failure, which is fine, because it's idempotent
+
+### Common Pitfalls to Avoid
+- ❌ Don't store status fields - compute on-demand
+- ❌ Don't use incremental updates - always complete recalculation
+- ❌ Don't skip version history - audit requirement
+- ❌ Don't ignore counterparty changes - must trigger dual events
+
+---
+
+## Manual Trigger a Recalculation
+
+### User Request
+User provides criteria:
+- `PTS`, `PROCESSING_ENTITY`
+- `VALUE_DATE` range
+
+### Event Generation
+```sql
+-- Find groups matching criteria
+SELECT DISTINCT PTS, PROCESSING_ENTITY, COUNTERPARTY_ID, VALUE_DATE
+FROM RUNNING_TOTAL
+WHERE ... (user criteria)
+```
+
+For each group:
+- Generate event with `REF_ID` = current max ID in `SETTLEMENT` table
+- Send the event to event bus for same processing logic to re-calculate
+
+### Entitlement and permission
+- Admin/supervisor privileges required
+- Logged with user ID, timestamp, scope, reason
+ 
+---
 
 ## Exchange Rate Behavior
 
@@ -210,31 +263,6 @@ When new rules are fetched:
 1. Will only be applied to in new running total calculations
 2. Existing running total calculations will be NOT be automatically updated. Users can manually trigger a recalculation with provide settlement criteria e.g. `PTS`, `PROCESSING_ENTITY`, `VALUE_DATE`
 3. Users should avoid trigger a recalculation during the busy hours.
-
----
-
-## Manual Trigger a Recalculation
-
-### User Request
-User provides criteria:
-- `PTS`, `PROCESSING_ENTITY`
-- `VALUE_DATE` range
-
-### Event Generation
-```sql
--- Find groups matching criteria
-SELECT DISTINCT PTS, PROCESSING_ENTITY, COUNTERPARTY_ID, VALUE_DATE
-FROM RUNNING_TOTAL
-WHERE ... (user criteria)
-```
-
-For each group:
-- Generate event with `REF_ID` = current max ID in `SETTLEMENT` table
-- Send the event to event bus for same processing logic to re-calculate
-
-### Requirements
-- Admin/supervisor privileges required
-- Logged with user ID, timestamp, scope, reason
 
 ---
 

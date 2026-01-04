@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
 
+## Your Role for this project
+- World's most top 10 software engineer, architect, tester
+- Supper strong at communication to clarify, summarizing and explaining
+- Super expert in Java, Vert.x, Oracle
+- Always treat code quality very high, always write try unit test to cover most of the code
+- Use the best practices and design principles to write clean, efficient, readable, testable, modularized code
+
 ## Project Overview
 
 **Payment Limit Monitoring System** - A financial risk management application built with Vert.x/Java that tracks settlement flows from trading systems, calculates aggregated exposure by counterparty and value date, and flags transactions exceeding predefined limits.
@@ -14,12 +21,57 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Technology Stack
 
-- **Framework**: Vert.x 4.5.23 (async, event-driven)
+- **Framework**: Vert.x 4.5.23.
 - **Language**: Java 21
 - **Database**: Oracle Database (production, development, testing)
 - **Build Tool**: Maven
 - **Testing**: JUnit 5, Mockito, Vert.x Unit
+- **Messaging**: Cannot use Kafka, Rabbit MQ etc. because of some architecture limitations
 - **Architecture**: Hexagonal Architecture with Event-Driven design
+
+## Critical
+- **Performance**: Always try to find the best ways to optimize performance, however need to keep the code clean and easy to read and easy to maintain.
+
+## Code Style Guidelines
+
+- **Java 21**: Use modern Java features where appropriate
+- **Vert.x patterns**: Use async handlers, avoid blocking operations
+- **Hexagonal architecture**: Keep domain pure, dependencies point inward
+- **Error handling**: Use proper exception handling, return meaningful error messages
+- **Logging**: Use SLF4J with Logback, follow existing log patterns
+- **Naming**: Follow existing naming conventions in the codebase
+- **Comments**: Add comments for complex business logic
+- **Lombok**: Use lombok annotations where appropriate to reduce boilerplate code. Use @Slf4j for logger
+- **Unit tests**: Write unit test for every class, except for some orchestration classes which are difficult to test by unit test case 
+
+
+## Files to Reference
+
+- **Requirements**: `.kiro/specs/payment-limit-monitoring/requirements.md`
+- **Tech Design**: `.kiro/specs/payment-limit-monitoring/tech-design.md`
+
+## Vert.x Context for Claude
+
+- **Source code**: Download Vert.x source and docs via Maven to study implementation
+- **Official docs**: https://vertx.io/ - comprehensive documentation and guides
+- **Pattern reference**: Examine existing code patterns in this project for Vert.x best practices
+
+## Coding best practices
+- **Prevent redundant `Promis`**: For logic already returns a `Future`, return it directly instead of creating a `Promise` and `complete` it.
+- **When making changes:**
+1. Run all tests first to ensure baseline
+2. Add tests for new functionality
+3. Run tests again to verify
+4. Check for any integration issues
+5. Always run tests before committing
+6. When debugging, add new log messages when necessary to improve the efficiency
+
+## Tools for claude to use
+- **WebFetch**: this tool always has error, so use curl instead
+- **WebSearch**: this tool always return nothing, so use chrome-devtool-mcp to search in cn.bing.com instead
+
+## Proxy Configuration
+If you cannot connect to external sites, apply the HTTP proxy (127.0.0.1:4080) to connect.
 
 ## Common Bash Commands
 
@@ -32,7 +84,7 @@ mvn clean package
 # Run application
 mvn exec:java -Dexec.mainClass="com.tvpc.Main"
 
-# Run specific tests
+# Run specific tests (examples)
 mvn test -Dtest=SettlementValidatorTest
 mvn test -Dtest=SettlementValidatorTest#testValidSettlement
 
@@ -51,36 +103,8 @@ podman exec -it oracle-db sqlplus tvpc/tvpc123@//localhost:1521/FREEPDB1
 podman start oracle-db
 ```
 
-## Code Style Guidelines
-
-- **Java 21**: Use modern Java features where appropriate
-- **Vert.x patterns**: Use async handlers, avoid blocking operations
-- **Hexagonal architecture**: Keep domain pure, dependencies point inward
-- **Transaction safety**: All critical operations must be in transactions
-- **Error handling**: Use proper exception handling, return meaningful error messages
-- **Logging**: Use SLF4J with Logback, follow existing log patterns
-- **Naming**: Follow existing naming conventions in the codebase
-- **Comments**: Add comments for complex business logic, especially around the 5-step ingestion flow
-
-## Testing Instructions
-
-**Always run tests before committing:**
-```bash
-mvn clean test
-```
-
-**Test structure:**
-- Unit tests in `src/test/java/com/tvpc/`
-- Validation tests: `SettlementValidatorTest.java`
-- Domain tests: `SettlementTest.java`, `EnumTest.java`
-- Service tests: Test the 5-step ingestion flow
-
-**When making changes:**
-1. Run all tests first to ensure baseline
-2. Add tests for new functionality
-3. Run tests again to verify
-4. Check for any integration issues
-
+## Stop the app
+- when the app is started, it put the PID into app.pid file, can kill the app by using the pid
 
 ## Key Files to Reference
 
@@ -96,12 +120,6 @@ mvn clean test
 - `src/main/resources/logback.xml` - Logging config
 
 
-## Proxy Configuration
-
-If you cannot connect to external sites, use the proxy:
-```bash
-source set-proxy.sh  # Sets HTTP_PROXY and HTTPS_PROXY to 127.0.0.1:4080
-```
 
 ## Project Structure & Key Classes
 
@@ -164,64 +182,8 @@ src/test/java/com/tvpc/
 - **RunningTotalProcessorVerticle.java** - Event consumer that listens on Vert.x event bus
 - **SettlementValidator.java** - Input validation with 11 field checks
 
-## Core Architecture Concepts
 
-### The Sequence ID (REF_ID) - Critical Concept
-
-Every settlement gets an **auto-incrementing sequence ID** (`ID` column in SETTLEMENT table) that serves as the foundation for consistency:
-- Monotonically increasing primary key from Oracle identity column
-- **NOT a version number** - it only increases
-- Defines scope: "calculate running totals using all settlements with ID ≤ seqId"
-- Used as `REF_ID` in `RUNNING_TOTAL` table
-- Guarantees ordering and idempotency
-
-## Workflow Tips
-
-### 1. Understand the 5-Step Ingestion Flow
-Before modifying `SettlementIngestionService.java`, understand:
-- Step 0: Validation (SettlementValidator)
-- Step 1: Save → Get REF_ID
-- Step 2: Mark old versions
-- Step 3: Detect counterparty changes
-- Step 4: Generate events (1 or 2)
-- Step 5: Calculate running totals
-
-**Save settlement should in a separate transaction.**
-**Mark old version should in a separate transaction.**
-**Calculate running totals should in a separate transaction.**
-**Can support reprocessing from client, so need to be idempotent.**
-**Key**: All 5 steps are executed **synchronously** within the HTTP request. So that it doesn't need extra time on event dispatching.
-
-### 2. Database Operations
-- **SETTLEMENT table**: Latest versions only, uses `IS_OLD` flag
-- **Unique constraint**: `(SETTLEMENT_ID, PTS, PROCESSING_ENTITY, SETTLEMENT_VERSION)` prevents duplicates
-- **Sequence ID (ID column)**: Auto-incrementing, becomes REF_ID, critical for ordering
-- **RUNNING_TOTAL**: Aggregated by group, updated via MERGE
-
-### 3. Event System
-- Events published to Vert.x event bus
-- `RunningTotalProcessorVerticle` consumes events
-- Events contain: `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE`, `REF_ID`
-- Counterparty changes trigger 2 events (old + new)
-- Events trigger async recalculation when needed
-
-### 4. Common Pitfalls to Avoid
-- ❌ Don't store status fields - compute on-demand
-- ❌ Don't use incremental updates - always complete recalculation
-- ❌ Don't skip version history - audit requirement
-- ❌ Don't process events concurrently - single-threaded processor
-- ❌ Don't ignore counterparty changes - must trigger dual events
-
-### **Duplicate Handling**: The database has a unique constraint on `(SETTLEMENT_ID, PTS, PROCESSING_ENTITY, SETTLEMENT_VERSION)`. If a duplicate is inserted:
-- The database throws a constraint violation exception
-- The service catches it and queries for the existing settlement's ID
-- Uses that ID as REF_ID for the rest of the flow
-- Returns HTTP 200 with the existing sequence ID
-- This makes the operation idempotent
-- This allows settlement resend from client can trigger all the steps in case of a failure
-
-
-### Database Schema (6 Tables)
+## Database Schema (6 Tables)
 
 1. **SETTLEMENT** - Latest versions only
    - `ID` (auto-increment, becomes REF_ID)
@@ -237,15 +199,6 @@ Before modifying `SettlementIngestionService.java`, understand:
 5. **ACTIVITIES** - Audit trail
 6. **NOTIFICATION_QUEUE** - External notifications with retry
 
-## Key Design Principles Implemented
-
-✅ **Complete Recalculation** - Always recalculates full group totals
-✅ **On-Demand Status** - Status computed at query time (not stored)
-✅ **Sequence ID Ordering** - Monotonic ID for version control
-✅ **Single-Threaded Processor** - Eliminates race conditions
-✅ **Event-Driven** - Handles high volume with consistency
-✅ **Atomic Operations** - All critical operations in transactions
-✅ **Version Management** - Latest + historical versions preserved
 
 ## Common Pitfalls to Avoid
 
@@ -254,7 +207,6 @@ Before modifying `SettlementIngestionService.java`, understand:
 ❌ **Don't skip version history** - Audit requirement
 ❌ **Don't allow same user to request and authorize** - Security violation
 ❌ **Don't recalculate historical data on rate changes** - Rates fixed at processing time
-❌ **Don't process events concurrently** - Use single-threaded processor
 ❌ **Don't ignore counterparty changes** - Must trigger dual events
 
 ## Configuration
@@ -270,9 +222,6 @@ database:
   driver_class: oracle.jdbc.OracleDriver
   user: tvpc
   password: tvpc123
-
-app:
-  mvp_mode: true  # Fixed 500M limit
 ```
 
 ## API Endpoints
@@ -315,22 +264,6 @@ Response:
 }
 ```
 
-## Validation Rules
-
-| Field | Requirement | Error |
-|-------|-------------|-------|
-| settlementId | Required, max 100 chars | "settlementId is required" |
-| settlementVersion | Required, positive timestamp | "settlementVersion is required" |
-| pts | Required | "pts is required" |
-| processingEntity | Required | "processingEntity is required" |
-| counterpartyId | Required | "counterpartyId is required" |
-| valueDate | Required, ISO format (YYYY-MM-DD), not past | "valueDate must be in ISO format" |
-| currency | Required, 3 chars, ISO 4217 | "currency must be a 3-character ISO 4217 code" |
-| amount | Required, non-negative, ≤2 decimals | "amount must be non-negative" |
-| businessStatus | Required, valid enum | "businessStatus must be one of: PENDING, INVALID, VERIFIED, CANCELLED" |
-| direction | Required, PAY or RECEIVE | "direction must be either PAY or RECEIVE" |
-| settlementType | Required, GROSS or NET | "settlementType must be either GROSS or NET" |
-
 
 ## Database Setup
 
@@ -340,16 +273,6 @@ Response:
 -- Run schema.sql
 @src/main/resources/db/schema.sql
 ```
-
-## Debugging Tips
-
-### Enable Debug Logging
-Edit `src/main/resources/logback.xml`:
-```xml
-<logger name="com.tvpc" level="DEBUG"/>
-```
-
-### Add new logging logic into the code when necessary
 
 
 ### Check Database State
@@ -374,25 +297,3 @@ curl -X POST http://localhost:8081/api/settlements \
 # Health check
 curl http://localhost:8081/health
 ```
-
-## Files to Reference
-
-- **Requirements**: `.kiro/specs/payment-limit-monitoring/requirements.md`
-- **Tech Design**: `.kiro/specs/payment-limit-monitoring/tech-design.md`
-
-## Vert.x Context for Claude
-
-- **Source code**: Download Vert.x source and docs via Maven to study implementation
-- **Official docs**: https://vertx.io/ - comprehensive documentation and guides
-- **Pattern reference**: Examine existing code patterns in this project for Vert.x best practices
-
-## Coding best practices
-- **Prevent redundant `Promis`**: For logic already returns a `Future`, return it directly instead of creating a `Promise` and `complete` it.
-- **Use Lombok**: Use lambok annotations to reduce boilerplate code. e.g. `@Data` for getter/setter, `@Builder` for builder pattern, `@AllArgsConstructor` for constructor. @Slf4j for logger
-
-## Tools for claude to use
-- **WebFetch**: this tool always has error, so use curl instead
-- **WebSearch**: this tool always return nothing, so use chrome-devtool-mcp to search in cn.bing.com instead
-
-## Stop the app
-- when the app is started, it put the PID into app.pid file, can kill the app by using the pid
