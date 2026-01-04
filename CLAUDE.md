@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
-
 ## Your Role for this project
 - World's most top 10 software engineer, architect, tester
 - Supper strong at communication to clarify, summarizing and explaining
