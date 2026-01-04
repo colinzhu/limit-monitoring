@@ -31,9 +31,10 @@ public class JdbcSettlementRepository implements SettlementRepository {
 
     @Override
     public Future<Long> save(Settlement settlement, SqlConnection connection) {
-        // Oracle-compatible approach: Two-step process
-        // Step 1: Execute INSERT
-        // Step 2: Query for the generated ID
+        // Two-query approach: INSERT then SELECT
+        // This is the most reliable method for Vert.x JDBC client with Oracle
+        // Both queries execute in the same transaction, so it's consistent
+        // The SELECT is fast because it uses the unique index
         String insertSql = "INSERT INTO SETTLEMENT (" +
                 "SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
                 "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
@@ -41,6 +42,7 @@ public class JdbcSettlementRepository implements SettlementRepository {
                 "CREATE_TIME, UPDATE_TIME" +
                 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+        LocalDateTime now = LocalDateTime.now();
         Tuple insertParams = Tuple.of(
                 settlement.getSettlementId(),
                 settlement.getSettlementVersion(),
@@ -54,36 +56,26 @@ public class JdbcSettlementRepository implements SettlementRepository {
                 settlement.getDirection().getValue(),
                 settlement.getSettlementType().getValue(),
                 settlement.getIsOld() ? 1 : 0,
-                LocalDateTime.now(),
-                LocalDateTime.now()
+                now,
+                now
         );
 
         return connection.preparedQuery(insertSql)
                 .execute(insertParams)
                 .compose(result -> {
-                    // Get the generated ID using a separate query
-                    String selectSql = "SELECT ID FROM SETTLEMENT " +
-                            "WHERE SETTLEMENT_ID = ? AND PTS = ? AND PROCESSING_ENTITY = ? AND SETTLEMENT_VERSION = ? " +
-                            "ORDER BY ID DESC FETCH FIRST 1 ROW ONLY";
-
-                    Tuple selectParams = Tuple.of(
+                    // Query for the generated ID using unique constraint fields
+                    return findExistingSettlementId(
                             settlement.getSettlementId(),
                             settlement.getPts(),
                             settlement.getProcessingEntity(),
-                            settlement.getSettlementVersion()
+                            settlement.getSettlementVersion(),
+                            connection
                     );
-
-                    return connection.preparedQuery(selectSql).execute(selectParams);
                 })
-                .map(result -> {
-                    if (result.size() > 0) {
-                        return result.iterator().next().getLong("ID");
-                    }
-                    throw new RuntimeException("Failed to retrieve generated ID after insert");
-                })
-                .compose(id -> {
+                .map(id -> {
                     settlement.setId(id);
-                    return Future.succeededFuture(id);
+                    log.debug("save: Settlement saved with ID: {}", id);
+                    return id;
                 })
                 .recover(throwable -> {
                     // Check if this is a duplicate constraint violation
@@ -96,7 +88,7 @@ public class JdbcSettlementRepository implements SettlementRepository {
                              errorMsg.contains("UniqueConstraintViolation"));
 
                     if (isDuplicate) {
-                        // Query for the existing settlement's ID
+                        // Query for the existing settlement's ID (idempotent behavior)
                         log.debug("save: Duplicate detected, querying for existing ID");
                         return findExistingSettlementId(
                                 settlement.getSettlementId(),
@@ -106,6 +98,7 @@ public class JdbcSettlementRepository implements SettlementRepository {
                                 connection
                         ).map(existingId -> {
                             settlement.setId(existingId);
+                            log.debug("save: Using existing settlement ID: {}", existingId);
                             return existingId;
                         });
                     }
