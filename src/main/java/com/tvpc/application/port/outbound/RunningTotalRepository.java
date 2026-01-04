@@ -1,0 +1,71 @@
+package com.tvpc.application.port.outbound;
+
+import com.tvpc.domain.model.RunningTotal;
+import io.vertx.core.Future;
+import io.vertx.sqlclient.SqlConnection;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Optional;
+
+/**
+ * Outbound port - Repository for Running Total operations
+ * Secondary port (driven by the infrastructure layer)
+ */
+public interface RunningTotalRepository {
+    /**
+     * Update or insert running total for a group
+     * @param pts Primary Trading System
+     * @param processingEntity Business unit
+     * @param counterpartyId Counterparty identifier
+     * @param valueDate Settlement value date
+     * @param runningTotal Calculated total in USD
+     * @param refId Sequence ID used for calculation
+     * @param connection Database connection
+     * @return Future indicating completion
+     */
+    Future<Void> updateRunningTotal(
+            String pts,
+            String processingEntity,
+            String counterpartyId,
+            LocalDate valueDate,
+            BigDecimal runningTotal,
+            Long refId,
+            SqlConnection connection
+    );
+
+    /**
+     * Get current running total for a group
+     * @param pts Primary Trading System
+     * @param processingEntity Business unit
+     * @param counterpartyId Counterparty identifier
+     * @param valueDate Settlement value date
+     * @return Future with optional running total
+     */
+    Future<Optional<RunningTotal>> getRunningTotal(
+            String pts,
+            String processingEntity,
+            String counterpartyId,
+            LocalDate valueDate
+    );
+
+    /**
+     * Calculate and save running total in a single SQL operation
+     * Combines query, calculation, and update into one database call
+     * @param pts Primary Trading System
+     * @param processingEntity Business unit
+     * @param counterpartyId Counterparty identifier
+     * @param valueDate Settlement value date
+     * @param maxSeqId Maximum sequence ID to include
+     * @param connection Database connection
+     * @return Future indicating completion
+     */
+    Future<Void> calculateAndSaveRunningTotal(
+            String pts,
+            String processingEntity,
+            String counterpartyId,
+            LocalDate valueDate,
+            Long maxSeqId,
+            SqlConnection connection
+    );
+}
