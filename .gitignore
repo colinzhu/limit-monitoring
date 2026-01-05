@@ -50,7 +50,6 @@ logs/
 *~
 
 # Build artifacts
-out/
 build/
 dist/
 
