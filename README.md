@@ -125,7 +125,7 @@ pom.xml                  # Maven build
    - `ID` (auto-increment, becomes REF_ID)
    - `SETTLEMENT_ID`, `SETTLEMENT_VERSION`
    - Group fields: `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE`
-   - Transaction fields: `CURRENCY`, `AMOUNT`, `DIRECTION`, `BUSINESS_STATUS`, `GROSS_NET`
+   - Transaction fields: `CURRENCY`, `AMOUNT`, `DIRECTION`, `BUSINESS_STATUS`, `SETTLEMENT_TYPE`
    - Version flag: `IS_OLD`
 
 2. **SETTLEMENT_HIST** - Archived old versions

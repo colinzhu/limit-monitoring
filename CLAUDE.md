@@ -245,7 +245,7 @@ src/main/resources/
    - `ID` (auto-increment, becomes REF_ID)
    - `SETTLEMENT_ID`, `SETTLEMENT_VERSION`
    - Group fields: `PTS`, `PROCESSING_ENTITY`, `COUNTERPARTY_ID`, `VALUE_DATE`
-   - Transaction: `CURRENCY`, `AMOUNT`, `DIRECTION`, `BUSINESS_STATUS`, `GROSS_NET`
+   - Transaction: `CURRENCY`, `AMOUNT`, `DIRECTION`, `BUSINESS_STATUS`, `SETTLEMENT_TYPE`
    - Version flag: `IS_OLD`
    - **Unique Constraint**: `(SETTLEMENT_ID, PTS, PROCESSING_ENTITY, SETTLEMENT_VERSION)` - prevents duplicates
 

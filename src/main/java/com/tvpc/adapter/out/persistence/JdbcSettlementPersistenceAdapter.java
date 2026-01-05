@@ -32,7 +32,7 @@ public class JdbcSettlementPersistenceAdapter implements SettlementRepository {
         String insertSql = "INSERT INTO SETTLEMENT (" +
                 "SETTLEMENT_ID, SETTLEMENT_VERSION, PTS, PROCESSING_ENTITY, " +
                 "COUNTERPARTY_ID, VALUE_DATE, CURRENCY, AMOUNT, " +
-                "BUSINESS_STATUS, DIRECTION, GROSS_NET, IS_OLD, " +
+                "BUSINESS_STATUS, DIRECTION, SETTLEMENT_TYPE, IS_OLD, " +
                 "CREATE_TIME, UPDATE_TIME" +
                 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
@@ -233,7 +233,7 @@ public class JdbcSettlementPersistenceAdapter implements SettlementRepository {
         settlement.setAmount(row.getBigDecimal("AMOUNT"));
         settlement.setBusinessStatus(BusinessStatus.fromValue(row.getString("BUSINESS_STATUS")));
         settlement.setDirection(SettlementDirection.fromValue(row.getString("DIRECTION")));
-        settlement.setSettlementType(SettlementType.fromValue(row.getString("GROSS_NET")));
+        settlement.setSettlementType(SettlementType.fromValue(row.getString("SETTLEMENT_TYPE")));
 
         Object isOldValue = row.getValue("IS_OLD");
         boolean isOld;

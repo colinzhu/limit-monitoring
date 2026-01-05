@@ -4,7 +4,6 @@ import com.tvpc.adapter.out.http.CalculationRuleHttpAdapter;
 import com.tvpc.domain.model.BusinessStatus;
 import com.tvpc.domain.model.CalculationRule;
 import com.tvpc.domain.model.SettlementDirection;
-import com.tvpc.domain.model.SettlementType;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import org.junit.jupiter.api.AfterEach;
