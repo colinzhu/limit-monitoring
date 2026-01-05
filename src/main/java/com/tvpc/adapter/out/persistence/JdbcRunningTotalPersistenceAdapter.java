@@ -99,10 +99,57 @@ public class JdbcRunningTotalPersistenceAdapter implements RunningTotalRepositor
             String counterpartyId,
             LocalDate valueDate,
             Long maxSeqId,
-            SqlConnection connection
+            SqlConnection connection,
+            java.util.Set<String> includedBusinessStatuses,
+            java.util.Set<String> includedDirections,
+            java.util.Set<String> includedSettlementTypes
     ) {
-        log.debug("calculateAndSaveRunningTotal: pts={}, pe={}, cp={}, vd={}, maxSeqId={}",
-                pts, processingEntity, counterpartyId, valueDate, maxSeqId);
+        log.debug("calculateAndSaveRunningTotal: pts={}, pe={}, cp={}, vd={}, maxSeqId={}, rules=[statuses={}, directions={}, types={}]",
+                pts, processingEntity, counterpartyId, valueDate, maxSeqId, 
+                includedBusinessStatuses, includedDirections, includedSettlementTypes);
+
+        // Build dynamic WHERE clause based on rules
+        StringBuilder whereClause = new StringBuilder();
+        whereClause.append("WHERE s.PTS = ? ")
+                .append("AND s.PROCESSING_ENTITY = ? ")
+                .append("AND s.COUNTERPARTY_ID = ? ")
+                .append("AND s.VALUE_DATE = ? ")
+                .append("AND s.ID <= ? ");
+
+        // Add business status filter
+        if (!includedBusinessStatuses.isEmpty()) {
+            whereClause.append("AND s.BUSINESS_STATUS IN (");
+            whereClause.append(String.join(",", includedBusinessStatuses.stream()
+                    .map(s -> "'" + s + "'")
+                    .toList()));
+            whereClause.append(") ");
+        }
+
+        // Add direction filter
+        if (!includedDirections.isEmpty()) {
+            whereClause.append("AND s.DIRECTION IN (");
+            whereClause.append(String.join(",", includedDirections.stream()
+                    .map(s -> "'" + s + "'")
+                    .toList()));
+            whereClause.append(") ");
+        }
+
+        // Add settlement type filter
+        if (!includedSettlementTypes.isEmpty()) {
+            whereClause.append("AND s.SETTLEMENT_TYPE IN (");
+            whereClause.append(String.join(",", includedSettlementTypes.stream()
+                    .map(s -> "'" + s + "'")
+                    .toList()));
+            whereClause.append(") ");
+        }
+
+        whereClause.append("AND s.SETTLEMENT_VERSION = ( ")
+                .append("  SELECT MAX(SETTLEMENT_VERSION) ")
+                .append("  FROM SETTLEMENT ")
+                .append("  WHERE SETTLEMENT_ID = s.SETTLEMENT_ID ")
+                .append("    AND PTS = s.PTS ")
+                .append("    AND PROCESSING_ENTITY = s.PROCESSING_ENTITY ")
+                .append(") ");
 
         String sql = "MERGE INTO RUNNING_TOTAL rt " +
                 "USING ( " +
@@ -115,20 +162,7 @@ public class JdbcRunningTotalPersistenceAdapter implements RunningTotalRepositor
                 "    ? as REF_ID " +
                 "  FROM SETTLEMENT s " +
                 "  LEFT JOIN EXCHANGE_RATE r ON s.CURRENCY = r.CURRENCY " +
-                "  WHERE s.PTS = ? " +
-                "    AND s.PROCESSING_ENTITY = ? " +
-                "    AND s.COUNTERPARTY_ID = ? " +
-                "    AND s.VALUE_DATE = ? " +
-                "    AND s.ID <= ? " +
-                "    AND s.DIRECTION = 'PAY' " +
-                "    AND s.BUSINESS_STATUS != 'CANCELLED' " +
-                "    AND s.SETTLEMENT_VERSION = ( " +
-                "      SELECT MAX(SETTLEMENT_VERSION) " +
-                "      FROM SETTLEMENT " +
-                "      WHERE SETTLEMENT_ID = s.SETTLEMENT_ID " +
-                "        AND PTS = s.PTS " +
-                "        AND PROCESSING_ENTITY = s.PROCESSING_ENTITY " +
-                "    ) " +
+                "  " + whereClause.toString() +
                 ") src " +
                 "ON (rt.PTS = src.PTS " +
                 "    AND rt.PROCESSING_ENTITY = src.PROCESSING_ENTITY " +
@@ -154,6 +188,8 @@ public class JdbcRunningTotalPersistenceAdapter implements RunningTotalRepositor
                 valueDate,
                 maxSeqId
         );
+
+        log.debug("Executing SQL with dynamic rules: {}", sql);
 
         return connection.preparedQuery(sql)
                 .execute(params)

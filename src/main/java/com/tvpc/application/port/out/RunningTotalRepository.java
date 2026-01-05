@@ -37,6 +37,7 @@ public interface RunningTotalRepository {
 
     /**
      * Calculate and save running total in a single SQL operation
+     * Applies calculation rules dynamically based on PTS and ProcessingEntity
      */
     Future<Void> calculateAndSaveRunningTotal(
             String pts,
@@ -44,7 +45,10 @@ public interface RunningTotalRepository {
             String counterpartyId,
             LocalDate valueDate,
             Long maxSeqId,
-            SqlConnection connection
+            SqlConnection connection,
+            java.util.Set<String> includedBusinessStatuses,
+            java.util.Set<String> includedDirections,
+            java.util.Set<String> includedSettlementTypes
     );
 
     /**

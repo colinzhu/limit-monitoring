@@ -27,6 +27,7 @@ public class HttpServerVerticle extends AbstractVerticle {
 
     private JDBCPool jdbcPool;
     private SettlementIngestionHandler ingestionHandler;
+    private com.tvpc.adapter.out.persistence.InMemoryCalculationRuleAdapter calculationRuleRepository;
 
     @Override
     public void start(Promise<Void> startPromise) {
@@ -35,7 +36,10 @@ public class HttpServerVerticle extends AbstractVerticle {
         initializeDatabase()
                 .compose(v -> {
                     log.info("Database initialized successfully");
-                    initializeServices();
+                    return initializeServices();
+                })
+                .compose(v -> {
+                    log.info("All services initialized successfully");
                     return startHttpServer();
                 })
                 .onSuccess(v -> {
@@ -85,13 +89,17 @@ public class HttpServerVerticle extends AbstractVerticle {
         }
     }
 
-    private void initializeServices() {
+    private Future<Void> initializeServices() {
         // Output ports (adapters)
         SettlementRepository settlementRepository = new JdbcSettlementPersistenceAdapter(jdbcPool);
         RunningTotalRepository runningTotalRepository = new JdbcRunningTotalPersistenceAdapter(jdbcPool);
         ActivityRepository activityRepository = new JdbcActivityPersistenceAdapter(jdbcPool);
         ExchangeRateRepository exchangeRateRepository = new JdbcExchangeRatePersistenceAdapter(jdbcPool);
         ConfigurationRepository configurationRepository = new InMemoryConfigurationAdapter();
+        
+        // HTTP adapter for fetching calculation rules
+        com.tvpc.adapter.out.http.CalculationRuleHttpAdapter ruleHttpAdapter = new com.tvpc.adapter.out.http.CalculationRuleHttpAdapter();
+        calculationRuleRepository = new com.tvpc.adapter.out.persistence.InMemoryCalculationRuleAdapter(vertx, ruleHttpAdapter);
 
         // Application services
         SettlementValidator validator = new SettlementValidator();
@@ -100,13 +108,19 @@ public class HttpServerVerticle extends AbstractVerticle {
                 settlementRepository,
                 runningTotalRepository,
                 jdbcPool,
-                configurationRepository
+                calculationRuleRepository
         );
 
         // Input adapters (handlers)
         ingestionHandler = new SettlementIngestionHandler(ingestionUseCase);
 
-        log.info("Services initialized successfully (Hexagonal Architecture)");
+        log.info("Services wired up (Hexagonal Architecture)");
+        
+        // CRITICAL: Initialize calculation rules before app can start
+        log.info("Initializing calculation rules (critical for startup)...");
+        return calculationRuleRepository.initialize()
+                .onSuccess(v -> log.info("Calculation rules loaded successfully - app can now start"))
+                .onFailure(error -> log.error("CRITICAL: Failed to load calculation rules - app cannot start", error));
     }
 
     private Future<Void> startHttpServer() {

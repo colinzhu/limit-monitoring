@@ -1,14 +1,11 @@
 package com.tvpc.application.service;
 
 import com.tvpc.application.port.in.SettlementIngestionUseCase;
-import com.tvpc.application.port.out.ConfigurationRepository;
+import com.tvpc.application.port.out.CalculationRuleRepository;
 import com.tvpc.application.port.out.RunningTotalRepository;
 import com.tvpc.application.port.out.SettlementRepository;
 import com.tvpc.domain.event.SettlementEvent;
-import com.tvpc.domain.model.BusinessStatus;
-import com.tvpc.domain.model.Settlement;
-import com.tvpc.domain.model.SettlementDirection;
-import com.tvpc.domain.model.SettlementType;
+import com.tvpc.domain.model.*;
 import io.vertx.core.Future;
 import io.vertx.jdbcclient.JDBCPool;
 import io.vertx.sqlclient.SqlConnection;
@@ -19,6 +16,9 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+
+import static java.util.stream.Collectors.*;
 
 /**
  * Application service implementing the settlement ingestion use case
@@ -32,7 +32,7 @@ public class SettlementIngestionUseCaseImpl implements SettlementIngestionUseCas
     private final SettlementRepository settlementRepository;
     private final RunningTotalRepository runningTotalRepository;
     private final JDBCPool jdbcPool;
-    private final ConfigurationRepository configurationRepository;
+    private final CalculationRuleRepository calculationRuleRepository;
 
     @Override
     public Future<Long> processSettlement(SettlementIngestionCommand command) {
@@ -170,13 +170,42 @@ public class SettlementIngestionUseCaseImpl implements SettlementIngestionUseCas
         log.debug("Calculating running total for group (pts={}, pe={}, cp={}, vd={}, seqId={})",
                 pts, processingEntity, counterpartyId, valueDate, seqId);
 
+        // Fetch calculation rule for this PTS+ProcessingEntity
+        Optional<CalculationRule> ruleOpt = calculationRuleRepository.getCalculationRule(pts, processingEntity);
+        
+        if (ruleOpt.isEmpty()) {
+            log.error("No calculation rule found for pts={}, processingEntity={}", pts, processingEntity);
+            return Future.failedFuture("No calculation rule found");
+        }
+
+        CalculationRule rule = ruleOpt.get();
+        
+        // Convert rule to string sets for SQL
+        Set<String> includedBusinessStatuses = rule.getIncludedBusinessStatuses().stream()
+                .map(BusinessStatus::getValue)
+                .collect(toSet());
+        
+        Set<String> includedDirections = rule.getIncludedDirections().stream()
+                .map(SettlementDirection::getValue)
+                .collect(toSet());
+        
+        Set<String> includedSettlementTypes = rule.getIncludedSettlementTypes().stream()
+                .map(SettlementType::getValue)
+                .collect(toSet());
+
+        log.debug("Applying calculation rule: statuses={}, directions={}, types={}", 
+                includedBusinessStatuses, includedDirections, includedSettlementTypes);
+
         return runningTotalRepository.calculateAndSaveRunningTotal(
                 pts,
                 processingEntity,
                 counterpartyId,
                 valueDate,
                 seqId,
-                connection
+                connection,
+                includedBusinessStatuses,
+                includedDirections,
+                includedSettlementTypes
         );
     }
 
